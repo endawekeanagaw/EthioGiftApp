@@ -1,130 +1,116 @@
-# GiftBridge Ethiopia v0.3 — End-to-End Gifting Sandbox 🎁
+# GiftBridge Ethiopia v0.4 — Digital gifting experience (local sandbox)
 
-GiftBridge is a **working local demonstration** of merchant-specific and universal digital gifts for Ethiopia. The new v0.3 release upgrades the v0.2 codebase with a refined gift marketplace, personalized gift designs, an unwrapping experience, an inbox, one-time redemption PINs, merchant branches, merchant reports, and a one-click Windows launcher.
+> **DEVELOPMENT DEMO ONLY — NOT A LIVE FINTECH PRODUCT.** Every checkout and card value is simulated. There are **no real M-PESA, telebirr, Dashen Bank, SMS, physical gift card, custody, settlement, or exchange connections**. The merchant and issuer names in the app are illustrative demonstrations, not partnerships. Do not host this demo on the public internet or use it with real customer information.
 
-> **DEMO ONLY. No real money, payment provider, financial service, verified gift value, Dashen Bank integration, or licensed settlement.** “M-PESA”, “telebirr”, and “Dashen Bank” labels inside checkout are simulated **choice labels**, not connected services. Example merchant brands are illustrative, not actual partners. The server refuses `APP_ENV=production` intentionally.
+GiftBridge is a Windows-friendly FastAPI + vanilla JavaScript application demonstrating merchant-specific and universal gift programs, simulated purchasing, recipient delivery, a wallet, merchant redemption, and merchant administration. v0.4 **extends v0.3**, preserving the core v0.3 tables and gift flows.
 
-## Get running (Windows)
+## What's new in v0.4
 
-**Recommended: Double-click `run.bat` inside the `giftbridge` folder.**
+- Refreshed responsive storefront with categories, saved favorites, search and merchant descriptions.
+- Persistent favorites for authenticated demo customers.
+- Quick gift denomination buttons, occasion selection, card-theme previews and a live personal-note preview.
+- Premium customer wallet with overall demo balance, search, remaining-value indicators and available/used filters.
+- Share a gift *announcement* using the browser share sheet or clipboard. **A share message does not contain the gift code, PIN or access link.** Recipients still must have a registered GiftBridge demo account; gifts are delivered through their in-app wallet and inbox.
+- Download branded **sandbox purchase and redemption receipts as HTML** (open and Print → Save as PDF). Receipts are permission-checked and watermarked as having no real value.
+- English / Amharic toggle for **primary marketing and navigation labels**. The rest of the interface is currently English: this is *partial localization*, not a fully translated product.
+- Admin can enter program category, short description and gift symbol when publishing a demo gift program.
+- Added automated tests for favorites, program presentation, receipt permissions, ownership and ledger preservation.
+- Updated one-click `run.bat` launcher to recognize version 0.4.0.
 
-The launcher will create `.venv` if necessary, install Python packages if missing, seed demo users and merchants, run Uvicorn, and open http://127.0.0.1:8000 when the server is ready. Requires **Python 3.11+** installed and available as `py -3` or `python`. Keep the terminal open while testing; Ctrl+C stops it.
+### Screenshots
 
-If you prefer PowerShell:
+See `docs/preview-v04-marketplace.png`, `docs/preview-v04-wallet.png` and `docs/preview-v04-mobile.png`. These screenshots are from an instrumented local browser test, not an externally hosted production environment.
+
+## First-time setup: Windows
+
+Requirements: Python 3.11+ installed; modern Windows browser. For GitHub use, Git is optional.
+
+1. Extract the archive; open the **inner `giftbridge` directory** containing `run.bat`.
+2. Double-click `run.bat`. It will create `.venv` if needed, install dependencies when missing, seed demo data, run the server on `127.0.0.1:8000`, and open your browser.
+3. Keep the command window open while using the demo. Press **Ctrl+C** to stop it.
+4. Open `http://127.0.0.1:8000` or `http://127.0.0.1:8000/docs` for API docs.
+
+PowerShell equivalent from the project folder:
 
 ```powershell
-cd path\to\giftbridge
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m backend.seed
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
 ```
 
-Then open **http://127.0.0.1:8000**. API docs: http://127.0.0.1:8000/docs.
+If port 8000 is already in use, close the other GiftBridge instance. The launcher intentionally refuses to open a different or older application responding on that port.
 
-### Demo sign-in accounts
+### Sample demo accounts
 
-All have demo password `DemoPass123!` — **never use these credentials on an internet-accessible system**.
+**Only use locally.** All example accounts share the password `DemoPass123!`:
 
 | Role | Phone |
-|---|---|
+| --- | --- |
 | Admin | `251900000001` |
 | Buyer | `251900000002` |
 | Gift recipient | `251900000003` |
 | Queens demo cashier | `251900000004` |
 
-## Walkthrough (10 steps)
+## End-to-end demo walkthrough
 
-1. Log in as **Buyer** (`251900000002`).
-2. Under **Discover gifts**, filter or search for a merchant-specific or universal program.
-3. Select a gift, enter an ETB amount, and send it to `251900000003`.
-4. Select a birthday/wedding/other occasion, choose a card design, and type a message.
-5. Click **Proceed to demo checkout** → choose a simulated channel → **Simulate successful payment**. A success dialog appears; no money moves.
-6. Log out, then log in as **Recipient** (`251900000003`). Open **Inbox** and **My wallet**; select **Open gift ✨** to unwrap it.
-7. In the wallet choose **Redeem PIN** to create a one-time eight-digit code (valid 5 minutes); note the gift card code and PIN. Generating another PIN invalidates the old one.
-8. Log out and sign in as **Cashier** (`251900000004`). Choose **Cashier POS**, paste the gift code and PIN, select Queens demo merchant, enter an amount smaller than the balance, and redeem.
-9. Confirm the simulated receipt and remaining balance. The recipient's Inbox receives a redemption notice.
-10. Cashier opens **Merchant studio** to review transaction history or export CSV. Admin can create new merchants, gift programs, branches, and cashier assignments.
+1. Sign in as Buyer. Browse the gift programs and click the heart to save one.
+2. Filter to **Saved gifts**, then back to **All gifts**; choose a program.
+3. Select ETB 500/1,000/2,000/5,000 or a custom amount, choose a design and occasion, add a personal message, and enter recipient `251900000003`.
+4. Click **Proceed to demo checkout**. Select a *simulated* channel and click **Simulate successful payment**.
+5. The gift is created once, and you can download a **sandbox HTML receipt**, or share an announcement without revealing redeem credentials.
+6. Sign out; sign in as Recipient. The gift is visible in **Inbox** and **My wallet**. Open the gift, view its message, and generate a single-use eight-digit redemption PIN.
+7. Sign out; sign in as Cashier. Use the gift code and freshly generated PIN to partially redeem the gift at a participating demo merchant.
+8. Download the redemption receipt; inspect the merchant dashboard and remaining gift balance.
+9. Repeat checkout with **Simulate failed payment**, and retry using **My orders**. Failed payments create no gift.
 
-**Failure path:** Choose simulated FAILED checkout. The order remains unpaid, no gift is issued, and **My orders → Retry payment** restarts the simulated checkout.
+### What is actually enforced
 
-## Features
+- Buyer permission on purchase receipts; recipient/assigned cashier/admin permission on redemption receipts.
+- Favorites are unique per account and only authenticated users can change them.
+- Demo payments are processed once; unsuccessful attempts cannot create gift cards.
+- Authorized merchants and a short-lived owner-issued PIN are required for redemption.
+- Atomic balance debit prevents overspending under competing requests in supported transaction conditions.
+- Balanced **simulated** ledger entries for issuance and redemption; merchant fee is for illustration only.
 
-| Feature | v0.3 scope |
-|---|---|
-| Digital gifts | Merchant-specific or multi-merchant universal demo gift programs |
-| Gifting | Personal message, occasion, named sender, 5 selectable designs, reveal modal |
-| Simulated payment | Paid/failed, failed retry, once-only issuance, attempt history |
-| Wallet | Gift balances, transfers between registered users, histories, summary |
-| Inbox | Received, issued, transferred, redeemed events with read state |
-| Redemption | Authorized cashier, one-time owner-generated 8-digit PIN, 5-minute expiry, max 5 wrong attempts, single use, partial/full redemption |
-| Merchant | Branch directory, authorized POS access, transaction reporting and local CSV export |
-| Admin | Merchants, programs, acceptance network, cashier assignments, branches, demo ledger and settlement reports |
-| Testing | Automated API integration tests and frontend end-to-end harness during development |
+### What is not implemented
 
-## Main technologies
+Actual monetary or financial settlement, issuing bank integrations, physical card scanning and issuer verification, SMS sending, secure gift claim links to unregistered recipients, OTP phone verification, real merchant onboarding/KYC, exchanges/resale, group funding, scheduled delivery, production user security, fully translated Amharic UI, native mobile apps or hosted production deployment.
 
-- **Backend:** Python, FastAPI, SQLAlchemy, Pydantic
-- **Database:** SQLite by default for local testing; PostgreSQL supported via `DATABASE_URL` for development
-- **Frontend:** Single-page vanilla JavaScript + responsive HTML/CSS; no npm/build step required
-- **Run locally:** Uvicorn, `run.bat` + `launcher.py`; Docker Compose optional
-- **Auth:** Demo password hashing and signed bearer tokens, **not hardened for production**
+## Existing v0.3 users: IMPORTANT
 
-### Directory layout
+Read [`docs/UPGRADE_FROM_V03.md`](docs/UPGRADE_FROM_V03.md). Do **not** remove or replace your `.git`, `.venv`, `.env` or `giftbridge.db` file. Make a database backup before copying source files. The code adds optional supporting tables, and does not alter existing v0.3 `cards`, `gift_orders` or `redemptions` columns.
 
-```text
-giftbridge/
-├── backend/
-│   ├── main.py            # Models, security, endpoints, gift/order flows
-│   └── seed.py            # Demo accounts and sample merchants
-├── frontend/
-│   ├── index.html          # Responsive customer, cashier, admin and merchant UI
-│   ├── app.js              # Browser workflow and API client
-│   └── style.css           # Product design system
-├── tests/test_flows.py     # API integration test suite
-├── docs/                   # Optional screenshots and upgrade guide
-├── launcher.py             # Readiness check; opens browser
-├── run.bat                 # One-click Windows runner
-├── requirements.txt
-└── docker-compose.yml
-```
-
-### Run tests
+## Automated tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Uses a fresh temporary test database. The test suite does **not** use your local `giftbridge.db` file.
+Tests use a separate temporary database (not `giftbridge.db`). Developer validation also includes a browser-harness walkthrough. The screenshots are examples, not substitutes for testing in your environment.
 
-### Database and upgrading from v0.2
+## Project structure
 
-The database stays **backward-compatible** for the local sandbox because v0.3 adds new supplemental tables rather than modifying old card/order columns. Existing v0.2 orders and gift balances remain in your local `giftbridge.db` if that file is preserved.
-
-**Always back up `giftbridge.db` before upgrading.** The release ZIP deliberately does not include any database. See [docs/UPGRADE_FROM_V02.md](docs/UPGRADE_FROM_V02.md) for exact steps.
-
-### Simulated card accounting and settlement
-
-The demo issues a gift only after a successful simulated attempt. That event adds equal/opposite ledger entries representing simulated funds and gift liability. Redemptions reduce the gift liability and record simulated merchant payables plus a sample 3% fee. **No issuer/customer money is held, moved, collected, safeguarded or settled**. Do not interpret the accounting model as a regulator-approved design.
-
-### Security limitations before any real deployment
-
-**This is not a production fintech platform.** At a minimum, real use requires an authorized issuer/payment partner and legal review; real provider webhooks; reconciled safeguarded customer funds; escrow/settlement contracts; provider-approved merchant and customer identity verification; secrets management; token rotation/refresh and revocation; HTTPS; rate limiting and bot controls; recipient onboarding and consent; security review and penetration testing; robust backup and disaster recovery; PostgreSQL transaction and load testing; migration management; fraud review; and proper customer support and dispute processes. The browser stores the demo token in `sessionStorage`, and demo accounts are seeded with published passwords. Do not expose this service to the public internet.
-
-Physical card verification, an exchange marketplace, scheduled SMS delivery, live notifications, production QR issuance, real receipts, cash-out, and real settlement are **not implemented**.
-
-## GitHub update
-
-Once you have extracted the release into your existing GiftBridge repository (keep its `.git` and `.venv` folders and `giftbridge.db`), run:
-
-```powershell
-git status
-git add .
-git commit -m "GiftBridge v0.3 - personalized gifting and merchant studio"
-git push
+```text
+giftbridge/
+  backend/main.py           # SQLAlchemy schema and FastAPI endpoints
+  backend/seed.py           # Idempotent demo data
+  frontend/index.html       # Customer, merchant, admin UI
+  frontend/style.css        # Responsive product design
+  frontend/app.js           # UI flows, receipts, localization
+  tests/test_flows.py       # API integration suite
+  docs/UPGRADE_FROM_V03.md  # Windows / GitHub update instructions
+  launcher.py               # Browser and server readiness
+  run.bat                   # Windows one-click startup
+  requirements.txt
+  docker-compose.yml        # Optional local Docker demo
 ```
 
-Be sure `.env`, SQLite database files and your local `.venv` are not staged. We have supplied `.gitignore` for these.
+### Local-only security statement
+
+FastAPI tokens use a development-only secret by default. Example accounts use published passwords; phone registration does not verify phone ownership; browser tokens are kept in session storage. Do not put real customer, bank or gift-card secrets into this prototype. The backend intentionally raises an error when `APP_ENV=production`.
+
+Before a real rollout you would need verified user identity, hardened authentication and session management, TLS, secret rotation, audits, rate limits, monitoring, a payment partner's signed callback flows, payment and gift reconciliation, security testing, operational controls, legal review, and necessary licensing or regulated partners.
 
 ---
-**GiftBridge Ethiopia · Build a culture of meaningful gifting.**
+**GiftBridge Ethiopia — Make gifting feel personal.**

@@ -1,10 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title GiftBridge Ethiopia v0.3 - Local Sandbox
+title GiftBridge Ethiopia v0.4 - Local Sandbox
 
 echo ============================================================
-echo      GiftBridge Ethiopia v0.3 - Local Demo
+echo      GiftBridge Ethiopia v0.4 - Local Demo
 
 echo      NO REAL PAYMENTS OR GIFT VALUE
 

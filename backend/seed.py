@@ -1,6 +1,6 @@
 """Idempotent local sandbox demo setup. Never use these accounts in production."""
 from sqlalchemy import select
-from backend.main import SessionLocal, User, Merchant, Program, Acceptance, MerchantStaff, hash_pw
+from backend.main import SessionLocal, User, Merchant, Program, Acceptance, MerchantStaff, ProgramAppearance, hash_pw
 
 with SessionLocal() as s:
     users = [
@@ -35,5 +35,14 @@ with SessionLocal() as s:
         for mid in ids:
             if not s.scalar(select(Acceptance).where(Acceptance.program_id==p.id,Acceptance.merchant_id==mid)):
                 s.add(Acceptance(program_id=p.id,merchant_id=mid))
+    sample_catalog = {
+        'Queens Gift (Demo)':('SHOPPING','For groceries and everyday favorites. A thoughtful way to treat someone.','🛍️'),
+        'Addis Home Depot Gift (Demo)':('SHOPPING','For their home, new beginnings, and practical surprises.','🏡'),
+        'GiftBridge Universal (Demo)':('UNIVERSAL','One gift. More choice across participating demonstration merchants.','✨'),
+    }
+    for name,(category,description,emoji) in sample_catalog.items():
+        p=s.scalar(select(Program).where(Program.name==name))
+        if p and not s.get(ProgramAppearance,p.id):
+            s.add(ProgramAppearance(program_id=p.id,category=category,description=description,emoji=emoji))
     s.commit()
 print('GiftBridge sandbox accounts and sample merchants are ready.')

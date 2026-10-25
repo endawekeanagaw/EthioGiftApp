@@ -29,3 +29,51 @@ button:focus-visible,a:focus-visible{outline:3px solid #d4af62;outline-offset:3p
 @media(max-width:760px){.hero{padding:32px 23px;border-radius:20px;margin-top:12px}.hero h1{font-size:47px}.design-picker{grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}.design-option{font-size:22px;padding:12px 2px}.design-option span{font-size:8px}.notification{flex-wrap:wrap}.notification>div:nth-child(2){flex-basis:calc(100% - 70px)}.purchase-panel{padding:20px}.purchase-preview{min-height:195px}.span-two{grid-column:auto}.pin-display{letter-spacing:5px;font-size:28px}.demo-flag{max-width:140px;text-align:center}.hero-visual{padding-right:0}.floating-note{right:0}}
 
 .purchase-preview{background:linear-gradient(135deg,#073a30,#246d50 70%,#88b48f);color:#fff}
+
+/* GiftBridge v0.4: refined customer journey, saved gifts, receipts and mobile layouts */
+:root{--gift-ink:#143a2c;--gift-gold:#cda85e}
+.hero-cta{display:flex;align-items:center;flex-wrap:wrap;gap:16px;margin:25px 0 20px}
+.hero-cta .btn{padding:14px 23px;border-radius:12px;box-shadow:0 11px 24px #16543e23}
+.hero-cta span{font-size:12px;font-weight:650;color:#648072}
+.lang-control{display:flex;align-items:center;min-width:0}
+.lang-control select{padding:7px 25px 7px 10px;border-radius:9px;font-size:12px;background:#f3f7f0;border:1px solid #dce8dc;max-width:106px}
+.sr-only{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.checkout-steps{display:flex;gap:8px;flex-wrap:wrap;margin:17px 0 28px}
+.checkout-steps span{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#eff6ed;border:1px solid #dce8db;border-radius:12px;font-size:12px;font-weight:750;color:#42654d}
+.checkout-steps b{display:inline-grid;place-items:center;border-radius:50%;background:#195b42;color:#fff;width:22px;height:22px;font-size:12px}
+.category-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.category-pill{background:transparent;border:1px solid #d8e5d9;color:#506e59;border-radius:11px;padding:9px 12px;font-weight:700;font-size:12px}
+.category-pill.active,.category-pill:hover{background:#e5f1e6;color:#215a3e;border-color:#a9ceb2}
+.catalog-card{position:relative}
+.catalog-card .card-top{position:relative}
+.catalog-card .catalog-symbol{font-family:system-ui, sans-serif;font-size:57px;line-height:1}
+.catalog-card .card-content{display:flex;flex-direction:column;gap:11px}
+.catalog-card .card-content p{flex:1;margin:0;min-height:60px}
+.fav-heart{position:absolute;right:15px;top:13px;border:1px solid #ffffff7d;background:#ffffff27;backdrop-filter:blur(8px);border-radius:50%;width:36px;height:36px;display:grid;place-items:center;color:white;font-size:24px;z-index:2;line-height:1}
+.fav-heart.active{background:#fff5eb;border-color:#fff5eb;color:#b74e5c}
+.fav-heart:hover{transform:scale(1.08)}
+.amount-picks{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.amount-picks button{background:#f3f8f3;border:1px solid #d7e6d8;color:#296342;border-radius:7px;font-size:11px;font-weight:750;padding:6px 8px}
+.amount-picks button:hover{background:#dceee0}
+.preview-layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(190px,1fr);gap:18px;align-items:stretch;margin:8px 0 21px}
+.preview-layout .purchase-preview{margin:0}
+.preview-message{background:#fbfaf5;border:1px solid #e9e5d8;border-radius:17px;padding:24px;display:flex;flex-direction:column;justify-content:center;min-width:0}
+.preview-message p{font:italic 21px/1.4 Georgia,serif;color:#3f634b;white-space:pre-wrap;overflow-wrap:anywhere}
+.preview-message small{font-size:11px;color:#829585;line-height:1.5}
+.wallet-summary{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin:0 0 19px}
+.wallet-balance,.wallet-count{display:grid;gap:7px;justify-content:start;padding:23px;border-radius:18px;background:#e9f3e9;border:1px solid #d0e4d1;color:#1b4934}
+.wallet-count{background:#fff;border-color:#dce7de}
+.wallet-summary span{font-size:12px;letter-spacing:.3px;color:#61826a;font-weight:750}
+.wallet-summary strong{font-size:clamp(24px,3vw,36px);font-weight:760;letter-spacing:-1px}
+.wallet-summary small{color:#769382;font-size:11px}
+.wallet-controls{display:flex;align-items:center;gap:14px;margin:15px 0 22px}
+.wallet-controls .search-field{flex:1;min-width:0}
+.wallet-controls select{width:auto;min-width:155px;padding:13px;border-radius:11px;background:#fff;border:1px solid #d7e4d9}
+.gift-progress{height:7px;border-radius:999px;background:#e8eee7;overflow:hidden;margin:11px 0 0}
+.gift-progress span{display:block;background:linear-gradient(90deg,#33714d,#8ec2a4);height:100%;border-radius:inherit}
+.modal .modal-actions{margin-top:14px}
+.modal-backdrop{z-index:100}
+button:disabled{opacity:.6;cursor:not-allowed}
+@media(max-width:860px){.preview-layout{grid-template-columns:1fr}.preview-message{min-height:130px}.hero-cta{gap:8px}}
+@media(max-width:600px){.nav-inner{gap:6px}.nav-right{gap:6px}.nav-right .demo-flag{display:none}.lang-control select{max-width:86px;padding-right:16px}.hero{padding:28px 18px}.hero h1{font-size:42px}.hero-visual{min-height:230px}.category-bar{flex-wrap:nowrap;overflow:auto;padding:2px 0 5px}.category-pill{flex-shrink:0}.checkout-steps span{font-size:10px;padding:6px 8px}.checkout-steps b{width:18px;height:18px;font-size:10px}.wallet-summary{grid-template-columns:1fr}.wallet-controls{flex-direction:column;align-items:stretch}.wallet-controls select{width:100%}.purchase-panel{padding:18px}.preview-message p{font-size:18px}.fav-heart{height:38px;width:38px}.dashboard-head h2{font-size:27px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}

@@ -1,4 +1,4 @@
-"""GiftBridge Ethiopia v0.2 — local SIMULATION only. No actual payments or gift value."""
+"""GiftBridge Ethiopia v0.4 — local demonstration only; no actual money or gift value."""
 import base64
 import hashlib
 import hmac
@@ -168,6 +168,21 @@ class CardRedeemPass(Base):
     consumed: Mapped[int] = mapped_column(Integer,default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=lambda: datetime.now(timezone.utc))
 
+class ProgramAppearance(Base):
+    """Optional storefront metadata. Separate table preserves the older v0.2/v0.3 programs schema."""
+    __tablename__ = 'program_appearances'
+    program_id: Mapped[int] = mapped_column(ForeignKey('programs.id'), primary_key=True)
+    category: Mapped[str] = mapped_column(String(30), default='SHOPPING')
+    description: Mapped[str] = mapped_column(String(240), default='')
+    emoji: Mapped[str] = mapped_column(String(12), default='🎁')
+
+class ProgramFavorite(Base):
+    __tablename__ = 'program_favorites'
+    __table_args__ = (UniqueConstraint('user_id', 'program_id'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    program_id: Mapped[int] = mapped_column(ForeignKey('programs.id'))
+
 class MerchantBranch(Base):
     __tablename__='merchant_branches'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -177,7 +192,7 @@ class MerchantBranch(Base):
     active: Mapped[int] = mapped_column(Integer,default=1)
 
 Base.metadata.create_all(engine)
-app = FastAPI(title='GiftBridge Ethiopia · Sandbox MVP',version='0.3.0',description='Only SIMULATED payments, card value, and settlement. Do not use with real money.')
+app = FastAPI(title='GiftBridge Ethiopia · Sandbox MVP',version='0.4.0',description='Only SIMULATED payments, card value, and settlement. Do not use with real money.')
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:8000','http://127.0.0.1:8000'],allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 
 def db():
@@ -255,6 +270,9 @@ class Login(BaseModel):phone:str;password:str
 class NewMerchant(BaseModel):name:str=Field(min_length=2,max_length=120)
 class NewProgram(BaseModel):
     name:str=Field(min_length=2,max_length=120)
+    category:str=Field(default='SHOPPING',max_length=30)
+    description:str=Field(default='',max_length=240)
+    emoji:str=Field(default='🎁',max_length=12)
     kind:str
     merchant_id:Optional[int]=None
     accepted_merchant_ids:list[int]=Field(min_length=1)
@@ -294,11 +312,39 @@ def me(u=Depends(current)):return {'id':u.id,'name':u.name,'phone':u.phone,'role
 @app.get('/api/merchants')
 def merchants(s:Session=Depends(db)):
     return [{'id':m.id,'name':m.name,'status':m.status} for m in s.scalars(select(Merchant).where(Merchant.status=='ACTIVE').order_by(Merchant.id))]
+GIFT_CATEGORIES = ('SHOPPING', 'FOOD', 'EXPERIENCES', 'BEAUTY', 'BOOKS', 'UNIVERSAL')
+
 @app.get('/api/programs')
 def programs(s:Session=Depends(db)):
-    return [{'id':p.id,'name':p.name,'kind':p.kind,'merchant_id':p.merchant_id,
-      'accepted_merchant_ids':list(s.scalars(select(Acceptance.merchant_id).where(Acceptance.program_id==p.id)))}
-      for p in s.scalars(select(Program).where(Program.active==1).order_by(Program.id))]
+    results=[]
+    for p in s.scalars(select(Program).where(Program.active==1).order_by(Program.id)):
+        appearance=s.get(ProgramAppearance,p.id)
+        results.append({'id':p.id,'name':p.name,'kind':p.kind,'merchant_id':p.merchant_id,
+          'accepted_merchant_ids':list(s.scalars(select(Acceptance.merchant_id).where(Acceptance.program_id==p.id))),
+          'category':appearance.category if appearance else ('UNIVERSAL' if p.kind=='UNIVERSAL' else 'SHOPPING'),
+          'description':appearance.description if appearance else '',
+          'emoji':appearance.emoji if appearance else ('✨' if p.kind=='UNIVERSAL' else '🎁')})
+    return results
+
+@app.get('/api/favorites')
+def favorites(u=Depends(current),s:Session=Depends(db)):
+    return {'program_ids':list(s.scalars(select(ProgramFavorite.program_id).where(ProgramFavorite.user_id==u.id)))}
+
+@app.post('/api/favorites/{program_id}')
+def add_favorite(program_id:int,u=Depends(current),s:Session=Depends(db)):
+    p=s.get(Program,program_id)
+    if not p or p.active!=1:raise HTTPException(404,'Gift program not available')
+    existing=s.scalar(select(ProgramFavorite).where(ProgramFavorite.user_id==u.id,ProgramFavorite.program_id==program_id))
+    if not existing:
+        s.add(ProgramFavorite(user_id=u.id,program_id=program_id));s.commit()
+    return {'favorite':True,'program_id':program_id}
+
+@app.delete('/api/favorites/{program_id}')
+def remove_favorite(program_id:int,u=Depends(current),s:Session=Depends(db)):
+    favorite=s.scalar(select(ProgramFavorite).where(ProgramFavorite.user_id==u.id,ProgramFavorite.program_id==program_id))
+    if favorite:
+        s.delete(favorite);s.commit()
+    return {'favorite':False,'program_id':program_id}
 @app.post('/api/admin/merchants')
 def new_merchant(body:NewMerchant,u=Depends(admin),s:Session=Depends(db)):
     name=body.name.strip()
@@ -317,8 +363,12 @@ def new_program(body:NewProgram,u=Depends(admin),s:Session=Depends(db)):
     for mid in mids:
         m=s.get(Merchant,mid)
         if not m or m.status!='ACTIVE':raise HTTPException(404,f'Active merchant {mid} not found')
+    if body.category not in GIFT_CATEGORIES:raise HTTPException(422,'Invalid gift category')
+    if not body.name.strip():raise HTTPException(422,'Program name required')
     p=Program(name=body.name.strip(),kind=body.kind,merchant_id=body.merchant_id if body.kind=='MERCHANT_SPECIFIC' else None)
     s.add(p);s.flush()
+    s.add(ProgramAppearance(program_id=p.id,category=body.category,
+        description=body.description.strip(),emoji=body.emoji.strip() or '🎁'))
     for mid in mids:s.add(Acceptance(program_id=p.id,merchant_id=mid))
     audit(s,u,'CREATE_PROGRAM',f'{p.id} {p.name}');s.commit()
     return {'id':p.id,'message':'Gift program published successfully'}
@@ -410,6 +460,41 @@ def retry_order(order_id:int,u=Depends(current),s:Session=Depends(db)):
     if o.status!='FAILED':raise HTTPException(409,'Only failed orders can be retried')
     o.status='PENDING';audit(s,u,'RETRY_PAYMENT',o.order_code);s.commit()
     return order_out(o,s)
+
+@app.get('/api/orders/{order_id}/receipt')
+def purchase_receipt(order_id:int,u=Depends(current),s:Session=Depends(db)):
+    o=s.get(GiftOrder,order_id)
+    if not o or (o.buyer_id!=u.id and u.role!='admin'):
+        raise HTTPException(404,'Receipt not found')
+    if o.status!='PAID':raise HTTPException(409,'Receipt is only available for paid orders')
+    paid=s.scalar(select(PaymentAttempt).where(PaymentAttempt.order_id==o.id,PaymentAttempt.status=='SUCCESS').order_by(PaymentAttempt.id.desc()))
+    card_link=s.scalar(select(OrderCard).where(OrderCard.order_id==o.id))
+    return {'receipt_type':'PURCHASE','demo_only':True,'reference':'GB-PUR-'+str(o.id).zfill(7),
+        'order_code':o.order_code,'gift_program':s.get(Program,o.program_id).name,
+        'amount_etb':etb(o.amount_minor),'payer':s.get(User,o.buyer_id).name,
+        'recipient':s.get(User,o.recipient_id).name,
+        'payment_channel':paid.provider if paid else 'SIMULATED',
+        'payment_reference':paid.reference if paid else None,
+        'gift_card_code':s.get(Card,card_link.card_id).public_id if card_link else None,
+        'date':(paid.created_at if paid else o.created_at).isoformat(),
+        'disclaimer':'SANDBOX RECEIPT — NO REAL PAYMENT OR MONETARY VALUE'}
+
+@app.get('/api/redemptions/{redemption_id}/receipt')
+def redemption_receipt(redemption_id:int,u=Depends(current),s:Session=Depends(db)):
+    r=s.get(Redemption,redemption_id)
+    if not r:raise HTTPException(404,'Receipt not found')
+    card=s.get(Card,r.card_id)
+    authorized=(u.role=='admin' or card.owner_id==u.id or
+        (u.role=='merchant' and s.scalar(select(MerchantStaff).where(
+            MerchantStaff.user_id==u.id,MerchantStaff.merchant_id==r.merchant_id)) is not None))
+    if not authorized:raise HTTPException(404,'Receipt not found')
+    return {'receipt_type':'REDEMPTION','demo_only':True,'reference':'GBR-'+str(r.id).zfill(7),
+        'merchant':s.get(Merchant,r.merchant_id).name,
+        'gift_program':s.get(Program,card.program_id).name,
+        'gift_card_code':card.public_id,'amount_etb':etb(r.amount_minor),
+        'fee_etb':etb(r.fee_minor),'date':r.created_at.isoformat(),
+        'disclaimer':'SANDBOX RECEIPT — NO REAL PAYMENT OR MONETARY VALUE'}
+
 @app.get('/api/wallet')
 def wallet(u=Depends(current),s:Session=Depends(db)):
     return [card_out(c,s) for c in s.scalars(select(Card).where(Card.owner_id==u.id).order_by(Card.id.desc())).all()]
@@ -447,7 +532,7 @@ def redeem(body:Redeem,u=Depends(current),s:Session=Depends(db)):
     if existing:
         if existing.merchant_id!=body.merchant_id or existing.amount_minor!=amount or s.get(Card,existing.card_id).public_id!=body.card_code.strip():
             raise HTTPException(409,'Idempotency key already used for a different redemption')
-        return {'id':existing.id,'status':'ALREADY_PROCESSED','balance_etb':etb(s.get(Card,existing.card_id).balance_minor)}
+        return {'id':existing.id,'receipt':'GBR-'+str(existing.id).zfill(7),'status':'ALREADY_PROCESSED','balance_etb':etb(s.get(Card,existing.card_id).balance_minor)}
     c=s.scalar(select(Card).where(Card.public_id==body.card_code.strip()).with_for_update())
     if not c:raise HTTPException(404,'Card not found')
     merchant=s.get(Merchant,body.merchant_id)
@@ -593,7 +678,7 @@ def wallet_summary(u=Depends(current),s:Session=Depends(db)):
             'balance_etb':etb(sum(c.balance_minor for c in cards))}
 
 @app.get('/api/health')
-def health():return {'status':'ok','mode':'SIMULATION','version':'0.3.0'}
+def health():return {'status':'ok','mode':'SIMULATION','version':'0.4.0'}
 app.mount('/assets',StaticFiles(directory=str(ROOT/'frontend')),name='assets')
 @app.get('/')
 def home():return FileResponse(ROOT/'frontend'/'index.html')

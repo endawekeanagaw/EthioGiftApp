@@ -1,7 +1,7 @@
 'use strict';
 let token=sessionStorage.getItem('gb_token');
 let user=JSON.parse(sessionStorage.getItem('gb_user')||'null');
-let programList=[],merchantList=[],cashierMerchants=[],authMode='login',selectedOrder=null,workingPayment=false,selectedDesign='emerald',catalogFilter='ALL',merchantRows=[];
+let programList=[],merchantList=[],cashierMerchants=[],authMode='login',selectedOrder=null,workingPayment=false,selectedDesign='emerald',catalogFilter='ALL',categoryFilter='ALL',favoriteIds=new Set(),merchantRows=[],walletItems=[];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>'ETB '+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -37,6 +37,7 @@ async function start(){
   $('userChip').textContent=me.name+' · '+me.role;$('welcome').textContent='Hello, '+me.name.split(' ')[0]+' 👋';
   $('adminTab').hidden=me.role!=='admin';$('posTab').hidden=!['admin','merchant'].includes(me.role);$('merchantTab').hidden=!['admin','merchant'].includes(me.role);$('senderName').value=me.name;
   await refresh();
+  favoriteIds=new Set((await api('/favorites')).program_ids);renderPrograms();
   if(['admin','merchant'].includes(me.role)){cashierMerchants=await api('/staff/merchants');renderCashierMerchants();}
   tab('shop');loadInbox().catch(()=>{});
 }
@@ -55,17 +56,41 @@ function renderCashierMerchants(){let source=user?.role==='admin'?merchantList:c
 function chooseProgram(id){tab('shop');$('program').value=id;updatePreview();$('buyPanel').scrollIntoView({behavior:'smooth'});}
 function renderPrograms(){
   const search=$('searchPrograms').value.trim().toLowerCase();
-  const filtered=programList.filter(p=>(catalogFilter==='ALL'||p.kind===catalogFilter) && (!search||p.name.toLowerCase().includes(search)));
-  $('programs').innerHTML=filtered.length?filtered.map((p,i)=>`<article class="giftcard catalog-card ${p.kind==='UNIVERSAL'?'universal':''}"><div class="card-top"><span class="card-kicker">${p.kind==='UNIVERSAL'?'✦ THE UNIVERSAL EDITION':'✦ A FAVORITE PLACE'}</span><div class="catalog-symbol">${p.kind==='UNIVERSAL'?'✧':'❋'}</div><h4>${esc(p.name)}</h4><span class="card-kicker">${p.kind==='UNIVERSAL'?'ONE GIFT, SO MANY POSSIBILITIES':'THOUGHTFUL. PERSONAL. DIGITAL.'}</span></div><div class="card-content"><span class="badge">${p.accepted_merchant_ids.length} ${p.accepted_merchant_ids.length===1?'location':'participating merchants'}</span><p>${p.kind==='UNIVERSAL'?'Give them the freedom to choose across participating stores.':'A little happiness from a place they love.'}</p><button class="btn outlined wide" onclick="chooseProgram(${p.id})">Personalize this gift →</button></div></article>`).join(''):'<div class="empty-state">No gifts match your search. Try another category or merchant.</div>';
+  const filtered=programList.filter(p=>(catalogFilter==='ALL'||p.kind===catalogFilter||(catalogFilter==='FAVORITES'&&favoriteIds.has(p.id)))
+    &&(categoryFilter==='ALL'||p.category===categoryFilter)
+    &&(!search||(p.name+' '+p.description+' '+p.category).toLowerCase().includes(search)));
+  $('programs').innerHTML=filtered.length?filtered.map(p=>`<article class="giftcard catalog-card ${p.kind==='UNIVERSAL'?'universal':''}">
+    <div class="card-top"><span class="card-kicker">${p.kind==='UNIVERSAL'?'✦ THE UNIVERSAL EDITION':'✦ A FAVORITE PLACE'}</span>
+    <button class="fav-heart ${favoriteIds.has(p.id)?'active':''}" type="button" aria-label="${favoriteIds.has(p.id)?'Remove saved gift':'Save gift'}" aria-pressed="${favoriteIds.has(p.id)}" onclick="toggleFavorite(${p.id})">${favoriteIds.has(p.id)?'♥':'♡'}</button>
+    <div class="catalog-symbol">${esc(p.emoji||'🎁')}</div><h4>${esc(p.name)}</h4><span class="card-kicker">${esc(p.category||'SHOPPING')}</span></div>
+    <div class="card-content"><span class="badge">${p.accepted_merchant_ids.length} ${p.accepted_merchant_ids.length===1?'participating merchant':'participating merchants'}</span>
+    <p>${esc(p.description|| (p.kind==='UNIVERSAL'?'One gift, many possibilities.':'A meaningful gift from a favorite place.'))}</p>
+    <button class="btn outlined wide" onclick="chooseProgram(${p.id})">Personalize this gift →</button></div></article>`).join(''):
+    '<div class="empty-state"><span>♡</span><h3>No matching gifts yet</h3><p>Explore other categories or save some favorites.</p><button class="btn outlined" onclick="clearGiftFilters()">Show all gifts</button></div>';
 }
+async function toggleFavorite(programId){
+  try{
+    if(favoriteIds.has(programId)){await api('/favorites/'+programId,'DELETE');favoriteIds.delete(programId);notify('Removed from saved gifts.');}
+    else{await api('/favorites/'+programId,'POST');favoriteIds.add(programId);notify('Saved to your favorite gifts ♥');}
+    renderPrograms();
+  }catch(e){notify(e.message,true);}
+}
+function clearGiftFilters(){catalogFilter='ALL';categoryFilter='ALL';$('searchPrograms').value='';document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b.dataset.filter==='ALL'));document.querySelectorAll('[data-category]').forEach(b=>b.classList.toggle('active',b.dataset.category==='ALL'));renderPrograms();}
 $('searchPrograms').addEventListener('input',renderPrograms);
 document.querySelectorAll('.filter-chips [data-filter]').forEach(btn=>btn.onclick=()=>{catalogFilter=btn.dataset.filter;document.querySelectorAll('.filter-chips [data-filter]').forEach(b=>b.classList.toggle('selected',b===btn));renderPrograms();});
-document.querySelectorAll('.design-option').forEach(btn=>btn.onclick=()=>{selectedDesign=btn.dataset.design;document.querySelectorAll('.design-option').forEach(b=>b.classList.toggle('selected',b===btn));updatePreview();});
-for(const id of ['amount','occasion','recipient','senderName'])$(id).addEventListener('input',updatePreview);
+document.querySelectorAll('[data-category]').forEach(btn=>btn.onclick=()=>{categoryFilter=btn.dataset.category;document.querySelectorAll('[data-category]').forEach(b=>b.classList.toggle('active',b===btn));renderPrograms();});
+$('heroExplore').onclick=()=>{if(!token){$('auth').scrollIntoView({behavior:'smooth'});return;}tab('shop');$('shop').scrollIntoView({behavior:'smooth'});};
+document.querySelectorAll('[data-amount]').forEach(btn=>btn.onclick=()=>{$('amount').value=btn.dataset.amount;updatePreview();});
+document.querySelectorAll('.design-option').forEach(btn=>btn.onclick=()=>{selectedDesign=btn.dataset.design;document.querySelectorAll('[data-category]').forEach(btn=>btn.onclick=()=>{categoryFilter=btn.dataset.category;document.querySelectorAll('[data-category]').forEach(b=>b.classList.toggle('active',b===btn));renderPrograms();});
+$('heroExplore').onclick=()=>{if(!token){$('auth').scrollIntoView({behavior:'smooth'});return;}tab('shop');$('shop').scrollIntoView({behavior:'smooth'});};
+document.querySelectorAll('[data-amount]').forEach(btn=>btn.onclick=()=>{$('amount').value=btn.dataset.amount;updatePreview();});
+document.querySelectorAll('.design-option').forEach(b=>b.classList.toggle('selected',b===btn));updatePreview();});
+for(const id of ['amount','occasion','recipient','senderName','giftMessage'])$(id).addEventListener('input',updatePreview);
 function updatePreview(){
   const selected=programList.find(p=>p.id===Number($('program').value));const box=$('giftPreview');
   box.className='purchase-preview design-'+selectedDesign;
   box.innerHTML=`<span>✦ GIFTBRIDGE / ${esc($('occasion').options[$('occasion').selectedIndex]?.textContent||'GIFT')}</span><strong>${esc(selected?.name||'GiftBridge gift')}</strong><b>${money($('amount').value||0)}</b><small>From ${esc($('senderName').value||'Someone special')} · SANDBOX PREVIEW</small>`;
+  $('previewMessage').textContent=$('giftMessage').value.trim()||'Your thoughtful message appears here.';
 }
 $('program').addEventListener('change',updatePreview);
 
@@ -85,7 +110,7 @@ function showPayment(order){
   <div class="bill"><div><span>Order</span><strong>${esc(order.code)}</strong></div><div><span>Gift</span><strong>${esc(order.program)}</strong></div><div><span>For</span><strong>${esc(order.recipient)}</strong></div><div><span>Occasion</span><strong>${esc(order.occasion.replaceAll('_',' '))}</strong></div><div><span>Gift amount</span><strong>${money(order.amount_etb)}</strong></div></div>
   <label>Simulated payment method<select id="simChannel"><option>M-PESA (simulated)</option><option>telebirr (simulated)</option><option>Dashen Bank (simulated)</option><option>Bank card (simulated)</option></select></label>
   <div class="modal-actions" style="margin-top:20px"><button id="paySuccess" class="btn solid">✓ Simulate successful payment</button><button id="payFailed" class="btn outlined">Simulate failed payment</button></div>
-  <p class="soft tiny center">No external API calls, real bank requests or charges.</p>`;
+  <p class="soft tiny center">No external API calls, real bank requests or charges. Your recipient receives a demo gift in their in-app wallet.</p>`;
   $('paySuccess').onclick=()=>pay('SUCCESS');$('payFailed').onclick=()=>pay('FAILED');openModal('paymentModal');
 }
 async function pay(outcome){
@@ -98,8 +123,9 @@ async function pay(outcome){
     if(result.status==='PAID'){
       $('successBody').innerHTML=`<div class="success-mark">✓</div><h2 id="successTitle" class="center">Gift purchased successfully!</h2><p class="soft center">Your simulated payment succeeded. A digital gift has been delivered to <strong>${esc(result.recipient)}</strong> in their GiftBridge inbox and wallet.</p>
       <div class="bill"><div><span>Gift</span><strong>${esc(result.program)}</strong></div><div><span>Gift value</span><strong>${money(result.amount_etb)}</strong></div><div><span>Card code</span><strong>${esc(result.card_code)}</strong></div><div><span>Payment</span><strong>SIMULATED · SUCCESS</strong></div></div>
-      <div class="modal-actions"><button class="btn solid" id="afterPayOrders">${result.recipient_phone===user.phone?'View my receipt →':'View purchase receipt →'}</button><button class="btn outlined" id="afterPayWallet">${result.recipient_phone===user.phone?'Open my wallet':'Open my wallet (gifts received)'}</button></div>`;
-      $('afterPayWallet').onclick=()=>{closeModal('successModal');tab('wallet');};
+      <div class="modal-actions"><button class="btn solid" id="afterPayReceipt">↓ Download demo receipt</button><button class="btn outlined" id="afterPayShare">↗ Share gift announcement</button><button class="btn outlined" id="afterPayOrders">View my orders</button></div>`;
+      $('afterPayReceipt').onclick=()=>downloadPurchaseReceipt(result.id);
+      $('afterPayShare').onclick=()=>shareGiftAnnouncement(result);
       $('afterPayOrders').onclick=()=>{closeModal('successModal');tab('orders');};
       openModal('successModal');notify('Success! Gift card '+result.card_code+' issued.');
     }else{
@@ -109,7 +135,7 @@ async function pay(outcome){
   finally{workingPayment=false;if(successBtn?.isConnected)successBtn.disabled=false;if(failedBtn?.isConnected)failedBtn.disabled=false;}
 }
 async function loadOrders(){
-  try{let orders=await api('/orders');$('orderList').innerHTML=orders.length?orders.map(o=>`<article class="order-row"><div><h4>${esc(o.program)} <span class="badge ${esc(o.status)}">${esc(o.status)}</span></h4><p>${esc(o.code)} · For ${esc(o.recipient)} · ${new Date(o.created_at).toLocaleString()}</p><strong>${money(o.amount_etb)}</strong><p>${esc(o.occasion.replaceAll('_',' '))} · ${esc(o.message||'A thoughtful gesture')}</p>${o.card_code?`<p>Gift card: <code>${esc(o.card_code)}</code></p>`:''}</div><div class="order-actions">${o.status==='PENDING'?`<button class="btn solid" onclick="payOrder(${o.id})">Complete checkout</button>`:''}${o.status==='FAILED'?`<button class="btn outlined" onclick="retryOrder(${o.id})">Retry payment</button>`:''}${o.status==='PAID'?'<span class="badge PAID">✓ Gift issued</span>':''}</div></article>`).join(''):'<div class="panel"><p class="soft">You have no orders yet. Visit the Gift Shop to buy your first gift.</p></div>';}catch(err){notify(err.message,true);}
+  try{let orders=await api('/orders');$('orderList').innerHTML=orders.length?orders.map(o=>`<article class="order-row"><div><h4>${esc(o.program)} <span class="badge ${esc(o.status)}">${esc(o.status)}</span></h4><p>${esc(o.code)} · For ${esc(o.recipient)} · ${new Date(o.created_at).toLocaleString()}</p><strong>${money(o.amount_etb)}</strong><p>${esc(o.occasion.replaceAll('_',' '))} · ${esc(o.message||'A thoughtful gesture')}</p>${o.card_code?`<p>Gift card: <code>${esc(o.card_code)}</code></p>`:''}</div><div class="order-actions">${o.status==='PENDING'?`<button class="btn solid" onclick="payOrder(${o.id})">Complete checkout</button>`:''}${o.status==='FAILED'?`<button class="btn outlined" onclick="retryOrder(${o.id})">Retry payment</button>`:''}${o.status==='PAID'?`<button class="btn outlined" onclick="downloadPurchaseReceipt(${o.id})">↓ Receipt</button><button class="btn outlined" onclick="shareGiftAnnouncementById(${o.id})">↗ Share</button>`:''}</div></article>`).join(''):'<div class="panel"><p class="soft">You have no orders yet. Visit the Gift Shop to buy your first gift.</p></div>';}catch(err){notify(err.message,true);}
 }
 async function payOrder(id){try{const o=await api('/orders/'+id);showPayment(o);}catch(err){notify(err.message,true);}}
 async function retryOrder(id){try{const o=await api('/orders/'+id+'/retry','POST');showPayment(o);}catch(err){notify(err.message,true);}}
@@ -117,16 +143,28 @@ $('refreshOrders').onclick=loadOrders;
 async function loadWallet(){
   try{
     const [cards,summary]=await Promise.all([api('/wallet'),api('/wallet/summary')]);
-    $('walletCards').innerHTML=cards.length?cards.map(c=>`<article class="giftcard wallet-card"><div class="card-top design-${esc(c.design)}"><span class="card-kicker">✦ ${esc(c.kind.replace('_',' '))}</span><div><span class="wallet-occasion">${esc(c.occasion.replaceAll('_',' '))}</span><h4>${esc(c.program)}</h4><strong>${money(c.balance_etb)}</strong></div><span class="card-kicker">A GIFT FOR YOU</span></div><div class="card-content"><span class="badge ${esc(c.status)}">${esc(c.status.replaceAll('_',' '))}</span><p>From <strong>${esc(c.sender)}</strong> · Original ${money(c.original_etb)}</p><div class="card-code">${esc(c.code)}</div><div class="card-actions" style="margin-top:15px"><button class="btn solid" onclick="unwrapGift(${c.id})">Open gift ✨</button><button class="btn outlined" onclick="showRedemptionCode(${c.id})" ${c.balance_etb<=0?'disabled':''}>Redeem PIN</button><button class="btn outlined" onclick="sendGift(${c.id})" ${c.balance_etb<=0?'disabled':''}>Send</button><button class="btn outlined" onclick="showHistory(${c.id})">Activity</button></div></div></article>`).join(''):'<div class="empty-state"><span>🎁</span><h3>Your first gift is waiting to happen</h3><p>Shop for yourself or receive a thoughtful surprise from someone else.</p><button class="btn solid" id="emptyShop">Explore gifts →</button></div>';
-    $('walletCards').dataset.total=summary.balance_etb;
-    if($('emptyShop'))$('emptyShop').onclick=()=>tab('shop');
+    walletItems=cards;
+    $('walletSummary').innerHTML=`<div class="wallet-balance"><span>My available gift balance</span><strong>${money(summary.balance_etb)}</strong><small>Demo gift value · No cash equivalent</small></div><div class="wallet-count"><span>My gifts</span><strong>${cards.length}</strong><small>Across participating demonstration brands</small></div>`;
+    renderWallet();
   }catch(err){notify(err.message,true);}
 }
+function renderWallet(){
+  const search=$('walletSearch').value.trim().toLowerCase(),status=$('walletStatus').value;
+  const cards=walletItems.filter(c=>(status==='ALL'||(status==='AVAILABLE'?c.balance_etb>0:c.balance_etb===0))&&(!search||(c.program+' '+c.code+' '+c.sender).toLowerCase().includes(search)));
+  $('walletCards').innerHTML=cards.length?cards.map(c=>`<article class="giftcard wallet-card"><div class="card-top design-${esc(c.design)}"><span class="card-kicker">✦ ${esc(c.kind.replace('_',' '))}</span><div><span class="wallet-occasion">${esc(c.occasion.replaceAll('_',' '))}</span><h4>${esc(c.program)}</h4><strong>${money(c.balance_etb)}</strong></div><span class="card-kicker">A GIFT FOR YOU</span></div>
+    <div class="card-content"><span class="badge ${esc(c.status)}">${esc(c.status.replaceAll('_',' '))}</span><p>From <strong>${esc(c.sender)}</strong> · Original ${money(c.original_etb)}</p><div class="card-code">${esc(c.code)}</div>
+    <div class="gift-progress" title="Remaining share of original value"><span style="width:${Math.min(100,Math.max(0,100*c.balance_etb/Math.max(c.original_etb,0.01)))}%"></span></div>
+    <div class="card-actions" style="margin-top:15px"><button class="btn solid" onclick="unwrapGift(${c.id})">Open gift ✨</button><button class="btn outlined" onclick="showRedemptionCode(${c.id})" ${c.balance_etb<=0?'disabled':''}>Redeem PIN</button><button class="btn outlined" onclick="sendGift(${c.id})" ${c.balance_etb<=0?'disabled':''}>Send</button><button class="btn outlined" onclick="showHistory(${c.id})">Activity</button></div></div></article>`).join(''):
+    '<div class="empty-state"><span>🎁</span><h3>No gifts found</h3><p>Try another filter or discover something thoughtful.</p><button class="btn solid" id="emptyShop">Explore gifts →</button></div>';
+  if($('emptyShop'))$('emptyShop').onclick=()=>tab('shop');
+}
+$('walletSearch').addEventListener('input',renderWallet);
+$('walletStatus').addEventListener('change',renderWallet);
 async function unwrapGift(id){
   try{
     const c=(await api('/wallet')).find(x=>x.id===id);if(!c)return;
-    $('successBody').innerHTML=`<div class="reveal-top design-${esc(c.design)}"><span>✦ GIFTBRIDGE · ${esc(c.occasion.replaceAll('_',' '))}</span><div class="reveal-icon">🎁</div><h2 id="successTitle">You have a gift!</h2><p>From ${esc(c.sender)}</p></div><h3 class="center">${esc(c.program)} · ${money(c.balance_etb)}</h3><blockquote class="gift-note">${esc(c.message||'Wishing you joy, today and always.')}</blockquote><p class="soft center">Your gift is safely in your demo wallet. Show a fresh one-time PIN to the cashier when ready to redeem.</p><button id="revealClose" class="btn solid wide">Keep celebrating ✨</button>`;
-    $('revealClose').onclick=()=>closeModal('successModal');openModal('successModal');
+    $('successBody').innerHTML=`<div class="reveal-top design-${esc(c.design)}"><span>✦ GIFTBRIDGE · ${esc(c.occasion.replaceAll('_',' '))}</span><div class="reveal-icon">🎁</div><h2 id="successTitle">You have a gift!</h2><p>From ${esc(c.sender)}</p></div><h3 class="center">${esc(c.program)} · ${money(c.balance_etb)}</h3><blockquote class="gift-note">${esc(c.message||'Wishing you joy, today and always.')}</blockquote><p class="soft center">Your gift is safely in your demo wallet. Show a fresh one-time PIN to the cashier when ready to redeem.</p><button id="revealShare" class="btn outlined wide">↗ Share a thank-you</button><button id="revealClose" class="btn solid wide">Keep celebrating ✨</button>`;
+    $('revealShare').onclick=()=>shareText(`Thank you for the thoughtful ${c.program} gift! 🎁 GiftBridge Ethiopia demo`);$('revealClose').onclick=()=>closeModal('successModal');openModal('successModal');
   }catch(e){notify(e.message,true);}
 }
 async function showRedemptionCode(id){
@@ -142,8 +180,8 @@ $('refreshWallet').onclick=loadWallet;
 $('redeemForm').onsubmit=event=>handleForm(event,async()=>{
   const r=await api('/redemptions','POST',{card_code:$('redeemCode').value.trim(),merchant_id:Number($('redeemMerchant').value),amount_etb:$('redeemAmount').value,redeem_pin:$('redeemPin').value.trim(),idempotency_key:makeKey()});
   $('redeemPin').value='';
-  $('successBody').innerHTML=`<div class="success-mark">✓</div><h2 id="successTitle" class="center">Gift redeemed!</h2><p class="soft center">Demo transaction captured successfully.</p><div class="bill"><div><span>Receipt</span><strong>${esc(r.receipt)}</strong></div><div><span>Merchant</span><strong>${esc(r.merchant)}</strong></div><div><span>Amount</span><strong>${money(r.amount_etb)}</strong></div><div><span>Remaining</span><strong>${money(r.balance_etb)}</strong></div></div><button id="closeReceipt" class="btn solid wide">Done</button>`;
-  $('closeReceipt').onclick=()=>closeModal('successModal');openModal('successModal');notify('✓ Redemption completed: '+r.receipt);
+  $('successBody').innerHTML=`<div class="success-mark">✓</div><h2 id="successTitle" class="center">Gift redeemed!</h2><p class="soft center">Demo transaction captured successfully.</p><div class="bill"><div><span>Receipt</span><strong>${esc(r.receipt)}</strong></div><div><span>Merchant</span><strong>${esc(r.merchant)}</strong></div><div><span>Amount</span><strong>${money(r.amount_etb)}</strong></div><div><span>Remaining</span><strong>${money(r.balance_etb)}</strong></div></div><button id="downloadRedeemReceipt" class="btn outlined wide">↓ Download demo receipt</button><button id="closeReceipt" class="btn solid wide">Done</button>`;
+  $('downloadRedeemReceipt').onclick=()=>downloadRedemptionReceipt(r.id);$('closeReceipt').onclick=()=>closeModal('successModal');openModal('successModal');notify('✓ Redemption completed: '+r.receipt);
   $('redeemCode').value='';
 });
 async function loadAdmin(){
@@ -164,7 +202,7 @@ $('programForm').onsubmit=event=>handleForm(event,async()=>{
   const kind=$('newProgramKind').value;
   if(kind==='MERCHANT_SPECIFIC'&&ids.length!==1)throw Error('Please choose exactly one merchant for a merchant-specific gift.');
   if(kind==='UNIVERSAL'&&ids.length<2)throw Error('Please choose at least two merchants for a universal gift.');
-  const response=await api('/admin/programs','POST',{name:$('newProgramName').value,kind,merchant_id:kind==='MERCHANT_SPECIFIC'?ids[0]:null,accepted_merchant_ids:ids});
+  const response=await api('/admin/programs','POST',{name:$('newProgramName').value,kind,merchant_id:kind==='MERCHANT_SPECIFIC'?ids[0]:null,accepted_merchant_ids:ids,category:$('newProgramCategory').value,description:$('newProgramDescription').value,emoji:$('newProgramEmoji').value});
   $('newProgramName').value='';await refresh();await loadAdmin();notify('✓ '+response.message+' It is now available in the Gift Shop.');
 });
 $('staffForm').onsubmit=event=>handleForm(event,async()=>{
@@ -200,7 +238,7 @@ async function loadMerchant(){
 $('merchantStudioSelect').onchange=loadMerchant;
 $('refreshMerchant').onclick=loadMerchant;
 $('exportMerchantCsv').onclick=()=>{
-  const escCsv=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+  const escCsv=v=>{let x=String(v??'');if(/^[\s]*[=+@\-\t\r]/.test(x))x="'"+x;return '"'+x.replaceAll('"','""')+'"';};
   const rows=[['Receipt','Gift card','Amount ETB','Fee ETB','Payable ETB','Date'],...merchantRows.map(r=>[r.receipt,r.card_code,r.amount_etb,r.fee_etb,r.payable_etb,r.at])];
   const csv=rows.map(row=>row.map(escCsv).join(',')).join('\r\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='giftbridge-demo-redemptions.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);
 };
@@ -208,5 +246,43 @@ $('branchForm').onsubmit=e=>handleForm(e,async()=>{
   const r=await api('/admin/branches','POST',{merchant_id:Number($('branchMerchant').value),name:$('branchName').value,city:$('branchCity').value});
   $('branchName').value='';notify('✓ '+r.message);await loadMerchant();
 });
+
+// v0.4: share a friendly announcement. Never share a card code or one-time redemption PIN.
+async function shareText(message){
+  try{
+    if(navigator.share){await navigator.share({title:'GiftBridge Ethiopia',text:message});return;}
+    if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(message);notify('Gift announcement copied. Paste it into your messaging app.');return;}
+    prompt('Copy this message:',message);
+  }catch(e){if(e.name!=='AbortError')notify('Could not share: '+e.message,true);}
+}
+function shareGiftAnnouncement(order){
+  shareText(`🎁 A thoughtful ${order.program} gift worth ${money(order.amount_etb)} is waiting for ${order.recipient} in GiftBridge Ethiopia (demo). Sign in to the recipient account to open it. No real payment was made.`);
+}
+async function shareGiftAnnouncementById(id){try{shareGiftAnnouncement(await api('/orders/'+id));}catch(e){notify(e.message,true);}}
+function escapeHtmlText(value){return esc(value);}
+function receiptHTML(data){
+  const rows=Object.entries(data).filter(([key])=>!['demo_only','disclaimer','receipt_type'].includes(key)).map(([key,value])=>
+    `<tr><th>${escapeHtmlText(key.replaceAll('_',' '))}</th><td>${escapeHtmlText(value??'—')}</td></tr>`).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtmlText(data.reference)} · GiftBridge Demo</title><style>
+    body{font-family:Arial,sans-serif;color:#193f2e;max-width:700px;margin:60px auto;padding:24px;background:#f8faf6}
+    .paper{background:white;padding:40px;border:1px solid #dbe7dd;border-radius:20px}
+    h1{font-size:27px}small{color:#728577}th{text-align:left;text-transform:capitalize;color:#67796f;font-weight:500}
+    table{border-collapse:collapse;width:100%;margin:26px 0}td,th{padding:13px 9px;border-bottom:1px solid #e6ede7;overflow-wrap:anywhere}
+    td{text-align:right;font-weight:700}.stamp{font-size:12px;border:2px solid #bb6b48;color:#994526;border-radius:10px;padding:12px;margin-top:24px;font-weight:700}
+    @media print{body{margin:0;background:white}.paper{border:0}}
+    </style></head><body><div class="paper"><small>✦ GIFTBRIDGE ETHIOPIA · SANDBOX</small><h1>${data.receipt_type==='PURCHASE'?'Gift purchase':'Gift redemption'} receipt</h1><p><strong>${escapeHtmlText(data.reference)}</strong></p><table>${rows}</table><div class="stamp">${escapeHtmlText(data.disclaimer)}</div><p><small>For developer testing only. Not proof of payment or a tax invoice. Print this page to save as PDF.</small></p></div></body></html>`;
+}
+function downloadHTML(filename,html){const blob=new Blob([html],{type:'text/html;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);}
+async function downloadPurchaseReceipt(id){try{const d=await api('/orders/'+id+'/receipt');downloadHTML(d.reference+'.html',receiptHTML(d));notify('Demo receipt downloaded. Open in your browser and print/save as PDF.');}catch(e){notify(e.message,true);}}
+async function downloadRedemptionReceipt(id){try{const d=await api('/redemptions/'+id+'/receipt');downloadHTML(d.reference+'.html',receiptHTML(d));notify('Demo redemption receipt downloaded.');}catch(e){notify(e.message,true);}}
+const localeTexts={
+ en:{heroEyebrow:'THE JOY OF GIVING, REIMAGINED',heroFirst:'Give a moment.',heroSecond:'Make it memorable.',heroCopy:'Choose a favorite brand or the freedom of a GiftBridge universal gift. Send it in moments. Make someone\'s day.',explore:'Explore gifts →',findGift:'Find the perfect gift',dashboardSub:'Your next thoughtful gesture starts here.',discover:'Discover gifts',orders:'My orders',wallet:'My wallet',inbox:'Inbox',buyGift:'Buy a digital gift'},
+ am:{heroEyebrow:'የስጦታ ባህላችንን በዲጂታል እናዘምን',heroFirst:'ደስታን ይስጡ።',heroSecond:'ትዝታን ይፍጠሩ።',heroCopy:'ከተለያዩ የንግድ ቦታዎች የስጦታ ካርድ ይምረጡ፤ ወይም ለተቀባዩ ሰፊ ምርጫ የሚሰጥ የGiftBridge ስጦታ ይላኩ።',explore:'ስጦታዎችን ይመልከቱ →',findGift:'ተስማሚውን ስጦታ ይምረጡ',dashboardSub:'ቀጣዩ ልዩ ስጦታዎ እዚህ ይጀምራል።',discover:'ስጦታዎች',orders:'ትዕዛዞቼ',wallet:'የስጦታ ቦርሳዬ',inbox:'መልዕክቶች',buyGift:'ዲጂታል ስጦታ ይግዙ'}
+};
+function setLanguage(lang){const selected=localeTexts[lang]?lang:'en';localStorage.setItem('gb_lang',selected);document.documentElement.lang=selected;
+ document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=localeTexts[selected][el.dataset.i18n]||localeTexts.en[el.dataset.i18n]||'';});$('languageSelect').value=selected;
+}
+$('languageSelect').onchange=e=>setLanguage(e.target.value);
+setLanguage(localStorage.getItem('gb_lang')||'en');
 
 if(token)start().catch(error=>{console.error('Session expired:',error);logout();});

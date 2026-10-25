@@ -131,3 +131,63 @@ def test_health_and_login_validation():
     assert post('/auth/login',{'phone':'nonexistent','password':'badpass'}).status_code==401
     assert get('/me').status_code==401
     assert get('/me',{'Authorization':'Bearer invalid'}).status_code==401
+
+
+def test_v04_saved_gifts_catalog_and_private_receipts():
+    """Independent v0.4 flow: appearance, favorites, access-controlled sandbox receipts."""
+    signup('251955500001','New Buyer')
+    signup('251955500002','Other Customer')
+    with SessionLocal() as s:
+        s.add(User(name='Catalog Admin',phone='251955500003',password_hash=hash_pw('DemoPass123!'),role='admin'))
+        s.commit()
+    buyer=login('251955500001');other=login('251955500002');adm=login('251955500003')
+    merchant=post('/admin/merchants',{'name':'Coffee Shop v04'},adm).json()['id']
+    program=post('/admin/programs',{'name':'Morning Coffee Treat','kind':'MERCHANT_SPECIFIC',
+        'merchant_id':merchant,'accepted_merchant_ids':[merchant],
+        'category':'FOOD','description':'Coffee and a thoughtful morning.','emoji':'☕'},adm)
+    assert program.status_code==200,program.text
+    pid=program.json()['id']
+    appearance=next(p for p in get('/programs').json() if p['id']==pid)
+    assert appearance['category']=='FOOD' and appearance['emoji']=='☕'
+    assert appearance['description']=='Coffee and a thoughtful morning.'
+    assert post('/admin/programs',{'name':'Invalid category','kind':'MERCHANT_SPECIFIC','merchant_id':merchant,
+        'accepted_merchant_ids':[merchant],'category':'BAD'},adm).status_code==422
+    assert get('/favorites').status_code==401
+    assert post(f'/favorites/{pid}',{},buyer).json()['favorite'] is True
+    assert post(f'/favorites/{pid}',{},buyer).status_code==200  # repeated add is safe
+    assert get('/favorites',buyer).json()['program_ids'].count(pid)==1
+    assert get('/favorites',other).json()['program_ids']==[]
+    assert client.delete('/api/favorites/'+str(pid),headers=other).status_code==200
+    assert pid in get('/favorites',buyer).json()['program_ids']
+    assert client.delete('/api/favorites/'+str(pid),headers=buyer).json()['favorite'] is False
+    assert pid not in get('/favorites',buyer).json()['program_ids']
+
+    order=post('/orders',{'program_id':pid,'amount_etb':'80.00','recipient_phone':'251955500001',
+        'message':'Enjoy your coffee','occasion':'THANK_YOU','design':'emerald'},buyer).json()
+    oid=order['id']
+    assert get(f'/orders/{oid}/receipt',buyer).status_code==409  # before payment
+    assert get(f'/orders/{oid}/receipt',other).status_code==404
+    paid=post(f'/orders/{oid}/simulate-payment',{'outcome':'SUCCESS','channel':'Demo bank'},buyer)
+    assert paid.status_code==200
+    receipt=get(f'/orders/{oid}/receipt',buyer)
+    assert receipt.status_code==200,receipt.text
+    receipt=receipt.json()
+    assert receipt['demo_only'] is True and receipt['amount_etb']==80
+    assert receipt['payment_channel']=='Demo bank' and 'NO REAL' in receipt['disclaimer']
+    assert get(f'/orders/{oid}/receipt',other).status_code==404
+    assert get(f'/orders/{oid}/receipt',adm).status_code==200
+    assert get('/redemptions/987654321/receipt',buyer).status_code==404
+    card=get('/wallet',buyer).json()[0]
+    pin=post(f"/cards/{card['id']}/redemption-pass",{},buyer).json()['redeem_pin']
+    body={'card_code':card['code'],'merchant_id':merchant,'amount_etb':'25',
+          'idempotency_key':'v04-redemption-unique-1','redeem_pin':pin}
+    redeem_result=post('/redemptions',body,adm)
+    assert redeem_result.status_code==200,redeem_result.text
+    rid=redeem_result.json()['id']
+    redemption=get(f'/redemptions/{rid}/receipt',buyer)
+    assert redemption.status_code==200
+    assert redemption.json()['amount_etb']==25
+    assert get(f'/redemptions/{rid}/receipt',other).status_code==404
+    assert get(f'/redemptions/{rid}/receipt',adm).status_code==200
+    with SessionLocal() as s:
+        assert all(balance==0 for _,balance in s.execute(select(Entry.event_id, __import__('sqlalchemy').func.sum(Entry.delta_minor)).group_by(Entry.event_id)))
