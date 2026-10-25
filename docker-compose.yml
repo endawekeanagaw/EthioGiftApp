@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: giftbridge
+      POSTGRES_PASSWORD: local_demo_only
+      POSTGRES_DB: giftbridge
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U giftbridge"]
+      interval: 5s
+      retries: 10
+  app:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://giftbridge:local_demo_only@db:5432/giftbridge
+      JWT_SECRET: local-development-secret-change-before-deployment
+      ENABLE_DEMO_FUNDING: "true"
+      APP_ENV: development
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  pgdata:
