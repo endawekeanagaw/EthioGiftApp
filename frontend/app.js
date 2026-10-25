@@ -29,7 +29,7 @@ $('authForm').onsubmit=event=>handleForm(event,async()=>{
 });
 function logout(){sessionStorage.removeItem('gb_token');sessionStorage.removeItem('gb_user');token=null;user=null;selectedOrder=null;$('auth').hidden=false;$('dashboard').hidden=true;$('logout').hidden=true;$('userChip').hidden=true;closeAllModals();notify('Signed out successfully.');}
 $('logout').onclick=logout;
-function tab(id){const b=document.querySelector(`[data-tab="${id}"]`);if(!b||b.hidden)return;document.querySelectorAll('[data-tab]').forEach(n=>n.classList.toggle('active',n===b));document.querySelectorAll('.view').forEach(n=>n.hidden=n.id!==id);if(id==='orders')loadOrders();if(id==='wallet')loadWallet();if(id==='admin')loadAdmin();if(id==='inbox')loadInbox();if(id==='merchant'){loadMerchant();loadMerchantTools();}if(id==='business')loadMerchantApplications();if(id==='admin')loadApplicationQueue();if(id!=='redeem')stopQrScanner();}
+function tab(id){const b=document.querySelector(`[data-tab="${id}"]`);if(!b||b.hidden)return;document.querySelectorAll('[data-tab]').forEach(n=>n.classList.toggle('active',n===b));document.querySelectorAll('.view').forEach(n=>n.hidden=n.id!==id);if(id==='orders')loadOrders();if(id==='wallet')loadWallet();if(id==='admin'){loadAdmin();if(typeof loadRiskOps==='function')loadRiskOps();}if(id==='inbox')loadInbox();if(id==='merchant'){loadMerchant();loadMerchantTools();}if(id==='business')loadMerchantApplications();if(id==='admin')loadApplicationQueue();if(id!=='redeem')stopQrScanner();}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.tab));
 async function start(){
   if(!token)return;
@@ -108,6 +108,7 @@ function showPayment(order){
   $('paymentBody').innerHTML=`<div class="modal-icon">🎁</div><span class="section-tag">SANDBOX CHECKOUT</span><h2 id="payTitle">Complete your gift</h2><p class="soft">This is a payment simulation. Choose a demo channel and simulate a success or a failure.</p>
   <div class="bill"><div><span>Order</span><strong>${esc(order.code)}</strong></div><div><span>Gift</span><strong>${esc(order.program)}</strong></div><div><span>For</span><strong>${esc(order.recipient)}</strong></div><div><span>Occasion</span><strong>${esc(order.occasion.replaceAll('_',' '))}</strong></div><div><span>Gift amount</span><strong>${money(order.amount_etb)}</strong></div></div>
   <label>Simulated payment method<select id="simChannel"><option>M-PESA (simulated)</option><option>telebirr (simulated)</option><option>Dashen Bank (simulated)</option><option>Bank card (simulated)</option></select></label>
+  <p id="gatewayProgress" class="sandbox-progress" aria-live="polite">Ready · No actual payment will be initiated</p>
   <div class="modal-actions" style="margin-top:20px"><button id="paySuccess" class="btn solid">✓ Simulate successful payment</button><button id="payFailed" class="btn outlined">Simulate failed payment</button></div>
   <p class="soft tiny center">No external API calls, real bank requests or charges. Your recipient receives a demo gift in their in-app wallet.</p>`;
   $('paySuccess').onclick=()=>pay('SUCCESS');$('payFailed').onclick=()=>pay('FAILED');openModal('paymentModal');
@@ -116,12 +117,21 @@ async function pay(outcome){
   if(workingPayment||!selectedOrder)return;workingPayment=true;
   const successBtn=$('paySuccess'),failedBtn=$('payFailed');successBtn.disabled=failedBtn.disabled=true;
   try{
-    const result=await api('/orders/'+selectedOrder.id+'/simulate-payment','POST',{outcome,channel:$('simChannel').value});
+    // v0.6 uses an explicit payment intent and sandbox gateway event.
+    // No customer money is collected; this is not a real provider integration.
+    const channel=$('simChannel').value;
+    const idem=makeKey();
+    $('gatewayProgress').textContent='1/3 · Creating a simulated payment intent…';
+    const intent=await api('/payments/intents','POST',{order_id:selectedOrder.id,channel,idempotency_key:idem});
+    $('gatewayProgress').textContent='2/3 · Processing a sandbox gateway event…';
+    const processed=await api('/payments/intents/'+intent.id+'/simulate','POST',{outcome});
+    $('gatewayProgress').textContent='3/3 · Checking gift issuance and status…';
+    const result=processed.order||await api('/orders/'+selectedOrder.id);
     closeModal('paymentModal');selectedOrder=null;
     await loadOrders();
     if(result.status==='PAID'){
       $('successBody').innerHTML=`<div class="success-mark">✓</div><h2 id="successTitle" class="center">Gift purchased successfully!</h2><p class="soft center">Your simulated payment succeeded. A digital gift has been delivered to <strong>${esc(result.recipient)}</strong> in their GiftBridge inbox and wallet.</p>
-      <div class="bill"><div><span>Gift</span><strong>${esc(result.program)}</strong></div><div><span>Gift value</span><strong>${money(result.amount_etb)}</strong></div><div><span>Card code</span><strong>${esc(result.card_code)}</strong></div><div><span>Payment</span><strong>SIMULATED · SUCCESS</strong></div></div>
+      <div class="bill"><div><span>Gift</span><strong>${esc(result.program)}</strong></div><div><span>Gift value</span><strong>${money(result.amount_etb)}</strong></div><div><span>Card code</span><strong>${esc(result.card_code)}</strong></div><div><span>Payment</span><strong>SIMULATED · SUCCESS</strong></div><div><span>Gateway</span><strong>Verified sandbox event (no funds)</strong></div></div>
       <div class="modal-actions"><button class="btn solid" id="afterPayReceipt">↓ Download demo receipt</button><button class="btn outlined" id="afterPayShare">↗ Share gift announcement</button><button class="btn outlined" id="afterPayOrders">View my orders</button></div>`;
       $('afterPayReceipt').onclick=()=>downloadPurchaseReceipt(result.id);
       $('afterPayShare').onclick=()=>shareGiftAnnouncement(result);

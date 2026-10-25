@@ -114,3 +114,16 @@ button:disabled{opacity:.6;cursor:not-allowed}
 #merchantTeamForm{margin-top:20px}
 #merchantOwnerArea .section-head{flex-wrap:wrap}
 @media(max-width:650px){.day-bar{grid-template-columns:50px minmax(45px,1fr) 90px}.scanner-top .btn{width:100%}.approval-actions .btn{flex:1}.row-amount{float:none;display:block}.application-card{padding:14px}}
+
+/* v0.6 finance and fraud operation panels */
+.risk-ops .two-cols {margin-top:18px;align-items:start}
+.ops-list {display:grid;gap:10px;margin:12px 0}
+.ops-item {border:1px solid #dce8df;border-radius:12px;padding:12px;background:#fff;overflow-wrap:anywhere}
+.ops-item p {margin:5px 0}
+.ops-item small {color:#526c5e}
+.ops-actions {display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.ops-success,.ops-warning {padding:14px;border-radius:12px;margin:12px 0}
+.ops-success {background:#e7f4e9;color:#195634;border:1px solid #9bccaa}
+.ops-warning {background:#fff5e7;color:#774110;border:1px solid #edbd8c}
+.sandbox-progress {border-radius:8px;padding:10px 12px;background:#eff4ef;color:#24533d;font-size:0.85rem}
+@media(max-width:760px){.risk-ops .two-cols {display:grid;grid-template-columns:1fr}}

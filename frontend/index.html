@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#103e30"><title>GiftBridge v0.5 | Send moments, not just money</title>
+  <meta name="theme-color" content="#103e30"><title>GiftBridge v0.6 | Send moments, not just money</title>
   <link rel="stylesheet" href="/assets/style.css">
 </head><body>
 <header class="nav"><div class="shell nav-inner">
@@ -49,13 +49,18 @@
       <div class="two-cols"><div class="panel"><h4>① Create merchant</h4><p class="soft">Add a retailer, restaurant or other participating partner.</p><form id="merchantForm"><label>Merchant name<input id="merchantName" placeholder="Example: Addis Coffee House" maxlength="120" required></label><button class="btn solid">Create merchant</button></form></div>
       <div class="panel"><h4>② Create gift program</h4><p class="soft">Choose a single merchant or a universal multi-merchant network.</p><form id="programForm"><label>Gift program name<input id="newProgramName" placeholder="Example: Coffee Lover Gift" maxlength="120" required></label><label>Category<select id="newProgramCategory"><option value="SHOPPING">Shopping</option><option value="FOOD">Food & drink</option><option value="EXPERIENCES">Experiences</option><option value="BEAUTY">Beauty</option><option value="BOOKS">Books</option><option value="UNIVERSAL">Universal</option></select></label><label>Description<input id="newProgramDescription" placeholder="What makes this gift special?" maxlength="240"></label><label>Gift symbol<input id="newProgramEmoji" maxlength="12" value="🎁" placeholder="🎁"></label><label>Gift type<select id="newProgramKind"><option value="MERCHANT_SPECIFIC">Merchant-specific</option><option value="UNIVERSAL">Universal multi-merchant</option></select></label><div><label>Accepted merchants</label><div class="merchant-picker" id="merchantPicker"></div><p id="programHint" class="soft tiny">Merchant-specific: choose exactly one.</p></div><button class="btn solid">Publish gift program</button></form></div></div>
       <div class="two-cols"><div class="panel"><h4>③ Add a merchant branch</h4><p class="soft">Create locations for your participating stores.</p><form id="branchForm"><label>Merchant<select id="branchMerchant" required></select></label><label>Branch name<input id="branchName" required placeholder="Bole branch"></label><label>City<input id="branchCity" value="Addis Ababa" required></label><button class="btn solid">Add branch</button></form></div><div class="panel"><h4>④ Assign a cashier</h4><p class="soft">The user must register a customer account first.</p><form id="staffForm"><label>Registered user's phone<input id="staffPhone" placeholder="2519..." required></label><label>Assign to merchant<select id="staffMerchant" required></select></label><button class="btn solid">Assign cashier</button></form></div><div class="panel"><h4>Merchant directory</h4><div id="merchantDirectory" class="simple-list"></div></div></div>
+      <div class="panel risk-ops"><div class="section-head"><div><span class="section-tag">FRAUD & CONTROLS</span><h4>⑥ Risk & reconciliation center</h4><p class="soft">Monitor verified sandbox payment events, ledger differences and suspicious activity.</p></div><button id="refreshRisk" class="btn outlined" type="button">↻ Run checks</button></div>
+        <div id="riskSummary" class="metrics"></div><div id="reconFindings" class="ops-list"></div>
+        <div class="two-cols"><div><h4>Simulated payment activity</h4><div id="paymentActivity" class="ops-list"></div></div><div><h4>Fraud alert queue</h4><div id="fraudQueue" class="ops-list"></div></div></div>
+        <p class="soft tiny">Sandbox only. These checks do not constitute real bank reconciliation, AML screening, or production fraud prevention.</p>
+      </div>
       <div class="panel"><h4>⑤ Settlement preview</h4><p class="soft">Calculated from simulated redemptions. No actual payout occurs.</p><div id="settlements" class="table-wrap"></div></div>
     </section>
   </section>
 </main>
-<footer><div class="shell footer-inner"><div>✦ GiftBridge Ethiopia <span>· Give meaningfully.</span></div><span>v0.5 development sandbox · Imaginary brands and simulated balances only · Not a licensed payment service</span></div></footer>
+<footer><div class="shell footer-inner"><div>✦ GiftBridge Ethiopia <span>· Give meaningfully.</span></div><span>v0.6 development sandbox · Imaginary brands and simulated balances only · Not a licensed payment service</span></div></footer>
 <div id="paymentModal" class="modal-backdrop" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="payTitle"><button type="button" class="modal-x" id="closePayment" aria-label="Close">×</button><div id="paymentBody"></div></div></div>
 <div id="successModal" class="modal-backdrop" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="successTitle"><button type="button" class="modal-x" id="closeSuccess" aria-label="Close">×</button><div id="successBody"></div></div></div>
 <script src="/assets/app.js"></script>
-<script src="/assets/merchant-v05.js"></script>
+<script src="/assets/merchant-v05.js"></script><script src="/assets/risk-v06.js"></script>
 </body></html>

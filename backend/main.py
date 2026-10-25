@@ -1,4 +1,4 @@
-"""GiftBridge Ethiopia v0.5 — local demonstration only; no actual money or gift value."""
+"""GiftBridge Ethiopia v0.6 — sandbox payment adapter, reconciliation and fraud triage."""
 import base64
 import hashlib
 import hmac
@@ -225,9 +225,66 @@ class RedemptionLocation(Base):
     branch_id: Mapped[Optional[int]] = mapped_column(ForeignKey('merchant_branches.id'), nullable=True)
     cashier_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
 
+
+# v0.6 additive schema: safe for existing v0.5 SQLite/PostgreSQL databases.
+class PaymentIntent(Base):
+    __tablename__ = 'payment_intents'
+    __table_args__ = (UniqueConstraint('buyer_id','idempotency_key'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey('gift_orders.id'))
+    buyer_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+    provider: Mapped[str] = mapped_column(String(40))
+    provider_reference: Mapped[str] = mapped_column(String(70), unique=True)
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default='PENDING')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda:datetime.now(timezone.utc))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class PaymentEvent(Base):
+    __tablename__ = 'payment_events'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_reference: Mapped[str] = mapped_column(String(85), unique=True)
+    intent_id: Mapped[int] = mapped_column(ForeignKey('payment_intents.id'))
+    outcome: Mapped[str] = mapped_column(String(16))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+
+class FraudAlert(Base):
+    __tablename__ = 'fraud_alerts'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(150), unique=True)
+    control_id: Mapped[str] = mapped_column(String(20))
+    severity: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(20), default='OPEN')
+    title: Mapped[str] = mapped_column(String(170))
+    detail: Mapped[str] = mapped_column(String(500))
+    note: Mapped[str] = mapped_column(String(350), default='')
+    reviewed_by: Mapped[Optional[int]] = mapped_column(ForeignKey('users.id'),nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc))
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True),nullable=True)
+
+class LoginGuard(Base):
+    __tablename__ = 'login_guards'
+    phone: Mapped[str] = mapped_column(String(30),primary_key=True)
+    failure_count: Mapped[int] = mapped_column(Integer,default=0)
+    first_failure_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True),nullable=True)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True),nullable=True)
+
 Base.metadata.create_all(engine)
-app = FastAPI(title='GiftBridge Ethiopia · Sandbox MVP',version='0.5.0',description='Only SIMULATED payments, card value, and settlement. Do not use with real money.')
+app = FastAPI(title='GiftBridge Ethiopia · Sandbox MVP',version='0.6.0',description='Only SIMULATED payments, card value, and settlement. Do not use with real money.')
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:8000','http://127.0.0.1:8000'],allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
+
+@app.middleware('http')
+async def safety_headers(request, call_next):
+    response = await call_next(request)
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['Permissions-Policy'] = 'camera=(self), microphone=(), geolocation=()'
+    if request.url.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
 
 def db():
     with SessionLocal() as s: yield s
@@ -339,8 +396,23 @@ def register(body:Register,s:Session=Depends(db)):
     return {'id':u.id,'message':'Account created. You can sign in now.'}
 @app.post('/api/auth/login')
 def login(body:Login,s:Session=Depends(db)):
-    u=s.scalar(select(User).where(User.phone==body.phone.strip()))
-    if not u or not verify_pw(body.password,u.password_hash):raise HTTPException(401,'Invalid credentials')
+    phone=body.phone.strip()
+    now=datetime.now(timezone.utc)
+    guard=s.get(LoginGuard,phone)
+    def aware(x):return x.replace(tzinfo=timezone.utc) if x and x.tzinfo is None else x
+    if guard and guard.locked_until and aware(guard.locked_until)>now:
+        raise HTTPException(429,'Too many attempts. Try again in 15 minutes.')
+    u=s.scalar(select(User).where(User.phone==phone))
+    if not u or not verify_pw(body.password,u.password_hash):
+        if not guard:guard=LoginGuard(phone=phone);s.add(guard)
+        if not guard.first_failure_at or aware(guard.first_failure_at)<now-timedelta(minutes=15):
+            guard.failure_count=0;guard.first_failure_at=now
+        guard.failure_count+=1
+        if guard.failure_count>=5:guard.locked_until=now+timedelta(minutes=15)
+        s.commit()
+        raise HTTPException(401,'Invalid credentials')
+    if guard:
+        s.delete(guard);s.commit()
     return {'access_token':make_token(u.id),'user':{'id':u.id,'name':u.name,'phone':u.phone,'role':u.role}}
 @app.get('/api/me')
 def me(u=Depends(current)):return {'id':u.id,'name':u.name,'phone':u.phone,'role':u.role}
@@ -489,6 +561,8 @@ def simulate_payment(order_id:int,body:PaymentIn,u=Depends(current),s:Session=De
         result=order_out(o,s);result['message']='Already paid — no duplicate gift issued'
         return result
     if o.status!='PENDING':raise HTTPException(409,'Order not pending; use Retry for a failed payment')
+    if s.scalar(select(PaymentIntent.id).where(PaymentIntent.order_id==o.id,PaymentIntent.status=='PENDING')):
+        raise HTTPException(409,'An active payment intent exists; complete it through sandbox checkout')
     # Conditional DB update avoids two successful callbacks issuing twice.
     changed=s.execute(update(GiftOrder).where(GiftOrder.id==o.id,GiftOrder.status=='PENDING')
                       .values(status='PAID' if body.outcome=='SUCCESS' else 'FAILED'))
@@ -514,6 +588,7 @@ def simulate_payment(order_id:int,body:PaymentIn,u=Depends(current),s:Session=De
                 body='Your digital gift card is now in your wallet.',card_id=c.id,event_type='GIFT_ISSUED'))
         audit(s,u,'PAYMENT_SUCCESS',f'{o.order_code} {c.public_id}')
     else:audit(s,u,'PAYMENT_FAILED',o.order_code)
+    monitor_checkout(s,o,body.outcome)
     s.commit()
     result=order_out(s.get(GiftOrder,o.id),s)
     result['message']='Payment successful! Your digital gift is ready.' if body.outcome=='SUCCESS' else 'Payment simulation failed. No gift was issued.'
@@ -624,6 +699,9 @@ def redeem(body:Redeem,u=Depends(current),s:Session=Depends(db)):
     expected=hmac.new(JWT_SECRET.encode(),f'{c.id}:{redeem_pass.id}:{body.redeem_pin}'.encode(),hashlib.sha256).hexdigest()
     if not secrets.compare_digest(expected,redeem_pass.secret_digest):
         redeem_pass.attempts+=1
+        if redeem_pass.attempts>=3:
+            raise_fraud(s,f'PIN_GUESS:{redeem_pass.id}','GBF003','Repeated invalid redemption PIN',
+                f'Card ID {c.id} received {redeem_pass.attempts} invalid PIN attempts', 'HIGH')
         s.commit()
         raise HTTPException(403,'Invalid redemption PIN')
     # Conditional atomic update avoids overdraft even under competing POS requests.
@@ -962,8 +1040,239 @@ def gift_code_qr(card_id:int,u=Depends(current),s:Session=Depends(db)):
     return {'card_code':c.public_id,'png_base64':base64.b64encode(stream.getvalue()).decode(),
         'note':'QR identifies the card only; the owner must separately provide a fresh one-time PIN.'}
 
+
+# === v0.6 payment intents, simulated provider events, reconciliation and fraud review ===
+# REAL PROVIDER CREDENTIALS / SETTLEMENT / WEBHOOKS ARE NOT SUPPORTED IN THIS SANDBOX.
+PAYMENT_CHANNELS=('M-PESA (simulated)','telebirr (simulated)','Dashen Bank (simulated)','Bank card (simulated)')
+
+def utc(dt):
+    return dt.replace(tzinfo=timezone.utc) if dt and dt.tzinfo is None else dt
+
+def raise_fraud(s, fingerprint, control_id, title, detail, severity='MEDIUM'):
+    # A stable fingerprint ensures replays don't create duplicate alerts.
+    exists=s.scalar(select(FraudAlert.id).where(FraudAlert.fingerprint==fingerprint))
+    if not exists:
+        s.add(FraudAlert(fingerprint=fingerprint,control_id=control_id,
+                         title=title,detail=detail,severity=severity))
+
+def monitor_checkout(s, order, outcome):
+    if outcome=='SUCCESS' and order.amount_minor>=1000000:
+        raise_fraud(s, 'HIGH_VALUE:'+str(order.id),'GBF001','High-value simulated gift',
+                    f'Order {order.order_code}: {etb(order.amount_minor):,.2f} ETB', 'HIGH')
+    if outcome=='FAILED':
+        cutoff=datetime.now(timezone.utc)-timedelta(hours=1)
+        failures=s.scalar(select(func.count()).select_from(PaymentAttempt).join(
+            GiftOrder,PaymentAttempt.order_id==GiftOrder.id).where(
+            GiftOrder.buyer_id==order.buyer_id,PaymentAttempt.status=='FAILED',
+            PaymentAttempt.created_at>=cutoff)) or 0
+        if failures>=3:
+            raise_fraud(s,'FAILED_PAYMENTS:'+str(order.buyer_id)+':'+datetime.now(timezone.utc).strftime('%Y%m%d%H'),
+                        'GBF002','Payment failures in one hour',
+                        f'Buyer ID {order.buyer_id}: {failures} failed sandbox payment attempts in one hour','MEDIUM')
+
+class NewPaymentIntent(BaseModel):
+    order_id:int
+    channel:str=Field(max_length=60)
+    idempotency_key:str=Field(min_length=12,max_length=100)
+
+class SimulateGateway(BaseModel):
+    outcome:str=Field(pattern='^(SUCCESS|FAILED)$')
+
+class ReviewFraud(BaseModel):
+    status:str=Field(pattern='^(OPEN|INVESTIGATING|RESOLVED|FALSE_POSITIVE)$')
+    note:str=Field(default='',max_length=350)
+
+def intent_out(x, s):
+    order=s.get(GiftOrder,x.order_id)
+    return {'id':x.id,'order_id':x.order_id,'order_code':order.order_code,
+            'provider':x.provider,'provider_reference':x.provider_reference,
+            'amount_etb':etb(x.amount_minor),'status':x.status,
+            'created_at':x.created_at.isoformat(),
+            'completed_at':x.completed_at.isoformat() if x.completed_at else None,
+            'sandbox_only':True}
+
+@app.post('/api/payments/intents',status_code=201)
+def create_intent(body:NewPaymentIntent,u=Depends(current),s:Session=Depends(db)):
+    if os.getenv('ENABLE_DEMO_FUNDING','true').lower()!='true':raise HTTPException(403,'Sandbox payment simulation disabled')
+    if body.channel not in PAYMENT_CHANNELS:raise HTTPException(422,'Unknown sandbox channel')
+    o=s.get(GiftOrder,body.order_id)
+    if not o or o.buyer_id!=u.id:raise HTTPException(404,'Order not found')
+    existing=s.scalar(select(PaymentIntent).where(PaymentIntent.buyer_id==u.id,
+                  PaymentIntent.idempotency_key==body.idempotency_key))
+    if existing:
+        if existing.order_id!=o.id or existing.provider!=body.channel:
+            raise HTTPException(409,'Idempotency key already belongs to another payment')
+        return intent_out(existing,s)
+    if o.status!='PENDING':raise HTTPException(409,'Order must be pending')
+    pending=s.scalar(select(PaymentIntent).where(PaymentIntent.order_id==o.id,PaymentIntent.status=='PENDING'))
+    if pending:
+        if pending.provider==body.channel:return intent_out(pending,s)
+        raise HTTPException(409,'Complete the existing payment intent first')
+    x=PaymentIntent(order_id=o.id,buyer_id=u.id,idempotency_key=body.idempotency_key,
+        provider=body.channel,provider_reference='GBSIM-'+secrets.token_hex(8).upper(),
+        amount_minor=o.amount_minor,status='PENDING')
+    s.add(x);s.flush();audit(s,u,'CREATE_PAYMENT_INTENT',f'{o.order_code} {x.provider_reference}')
+    s.commit();return intent_out(x,s)
+
+def capture_intent(s, x, outcome, event_reference):
+    """Single transaction: one verified demo event -> one order transition -> at most one card."""
+    prior=s.scalar(select(PaymentEvent).where(PaymentEvent.event_reference==event_reference))
+    if prior:
+        if prior.intent_id!=x.id or prior.outcome!=outcome:
+            raise HTTPException(409,'Event reference already belongs to another payment')
+        return {'status':'ALREADY_PROCESSED','intent_id':x.id,'order_status':s.get(GiftOrder,x.order_id).status}
+    if x.status!='PENDING':
+        raise HTTPException(409,'Payment already finalized with a different event')
+    o=s.get(GiftOrder,x.order_id)
+    if o.status!='PENDING' or x.amount_minor!=o.amount_minor:
+        raise HTTPException(409,'Payment order is not pending or amount changed')
+    # Compare-and-swap: two concurrent simulated payment events cannot both issue value.
+    changed=s.execute(update(GiftOrder).where(GiftOrder.id==o.id,GiftOrder.status=='PENDING')
+        .values(status='PAID' if outcome=='SUCCESS' else 'FAILED'))
+    if changed.rowcount!=1:
+        s.rollback();raise HTTPException(409,'Payment has already been finalized')
+    sequence=(s.scalar(select(func.count()).select_from(PaymentAttempt).where(
+        PaymentAttempt.order_id==o.id)) or 0)+1
+    s.add(PaymentAttempt(order_id=o.id,attempt_number=sequence,provider=x.provider,
+        status=outcome,reference=x.provider_reference))
+    s.add(PaymentEvent(intent_id=x.id,event_reference=event_reference,outcome=outcome))
+    x.status='SUCCEEDED' if outcome=='SUCCESS' else 'FAILED'
+    x.completed_at=datetime.now(timezone.utc)
+    if outcome=='SUCCESS':
+        c=Card(public_id='GB-'+secrets.token_hex(6).upper(),program_id=o.program_id,
+            owner_id=o.recipient_id,original_minor=o.amount_minor,balance_minor=o.amount_minor,status='ACTIVE')
+        s.add(c);s.flush();s.add(OrderCard(order_id=o.id,card_id=c.id))
+        entry(s,'ISSUE-'+str(c.id),'SIMULATED_FUNDS',o.amount_minor)
+        entry(s,'ISSUE-'+str(c.id),'GIFT_LIABILITY',-o.amount_minor)
+        buyer=s.get(User,o.buyer_id)
+        s.add(GiftNotification(user_id=o.recipient_id,
+            title='A gift is waiting for you 🎁' if o.recipient_id!=o.buyer_id else 'Your gift is ready ✨',
+            body=f'{buyer.name} sent you {s.get(Program,o.program_id).name}.' if o.recipient_id!=o.buyer_id else 'Your digital gift is in your wallet.',
+            card_id=c.id,event_type='GIFT_RECEIVED' if o.recipient_id!=o.buyer_id else 'GIFT_ISSUED'))
+    monitor_checkout(s,o,outcome)
+    s.add(Audit(actor_id=o.buyer_id,action='GATEWAY_'+outcome,detail=f'{o.order_code} {event_reference}'))
+    s.commit()
+    return {'status':'PROCESSED','intent_id':x.id,'order_status':o.status,
+            'order':order_out(o,s),'sandbox_only':True}
+
+@app.get('/api/payments/intents/{intent_id}')
+def get_intent(intent_id:int,u=Depends(current),s:Session=Depends(db)):
+    x=s.get(PaymentIntent,intent_id)
+    if not x or (x.buyer_id!=u.id and u.role!='admin'):raise HTTPException(404,'Payment intent not found')
+    return intent_out(x,s)
+
+@app.post('/api/payments/intents/{intent_id}/simulate')
+def simulate_gateway(intent_id:int,body:SimulateGateway,u=Depends(current),s:Session=Depends(db)):
+    if os.getenv('ENABLE_DEMO_FUNDING','true').lower()!='true':raise HTTPException(403,'Sandbox payment simulation disabled')
+    x=s.get(PaymentIntent,intent_id)
+    if not x or x.buyer_id!=u.id:raise HTTPException(404,'Payment intent not found')
+    if x.status!='PENDING':
+        return {'status':'ALREADY_PROCESSED','intent_id':x.id,'order_status':s.get(GiftOrder,x.order_id).status,
+                'order':order_out(s.get(GiftOrder,x.order_id),s),'sandbox_only':True}
+    event_reference='EVT-'+secrets.token_hex(12).upper()
+    return capture_intent(s,x,body.outcome,event_reference)
+
+# Only for API integration exercises; deliberately disabled in ordinary local operation.
+# A real provider webhook would require provider-specific authentication and event verification.
+@app.post('/api/payments/webhook/sandbox')
+def sandbox_webhook(event:dict, x_giftbridge_signature:Optional[str]=Header(None),
+                    x_giftbridge_timestamp:Optional[str]=Header(None),s:Session=Depends(db)):
+    if os.getenv('ENABLE_SANDBOX_WEBHOOK','false').lower()!='true':raise HTTPException(404,'Not enabled')
+    secret=os.getenv('SANDBOX_WEBHOOK_SECRET','')
+    if len(secret)<24:raise HTTPException(503,'Webhook signing secret missing')
+    try:
+        stamp=int(x_giftbridge_timestamp or '0')
+        if abs(datetime.now(timezone.utc).timestamp()-stamp)>300:raise ValueError('stale')
+    except (ValueError,TypeError):raise HTTPException(401,'Invalid webhook timestamp')
+    blob=json.dumps(event,sort_keys=True,separators=(',',':'))
+    expected=hmac.new(secret.encode(),f'{stamp}.{blob}'.encode(),hashlib.sha256).hexdigest()
+    if not x_giftbridge_signature or not hmac.compare_digest(x_giftbridge_signature,expected):
+        raise HTTPException(401,'Invalid webhook signature')
+    if sorted(event.keys())!=['amount_minor','event_reference','intent_id','outcome','provider_reference']:
+        raise HTTPException(422,'Invalid webhook fields')
+    if event['outcome'] not in ('SUCCESS','FAILED'):raise HTTPException(422,'Invalid outcome')
+    x=s.get(PaymentIntent,event['intent_id']) if type(event['intent_id']) is int else None
+    if not x or x.provider_reference!=event['provider_reference'] or x.amount_minor!=event['amount_minor']:
+        raise HTTPException(409,'Intent/provider reference/amount mismatch')
+    if not isinstance(event['event_reference'],str) or len(event['event_reference'])>85:
+        raise HTTPException(422,'Invalid event reference')
+    return capture_intent(s,x,event['outcome'],event['event_reference'])
+
+@app.get('/api/admin/payment-activity')
+def payment_activity(u=Depends(admin),s:Session=Depends(db)):
+    latest=s.scalars(select(PaymentIntent).order_by(PaymentIntent.id.desc()).limit(40)).all()
+    return [{'id':x.id,'order_code':s.get(GiftOrder,x.order_id).order_code,
+             'provider':x.provider,'reference':x.provider_reference,'status':x.status,
+             'amount_etb':etb(x.amount_minor),'created_at':x.created_at.isoformat()}
+            for x in latest]
+
+@app.get('/api/admin/reconciliation')
+def reconcile(u=Depends(admin),s:Session=Depends(db)):
+    # All amounts are integer minor units, never floating-point comparisons.
+    issued=s.scalar(select(func.coalesce(func.sum(Card.original_minor),0))) or 0
+    remaining=s.scalar(select(func.coalesce(func.sum(Card.balance_minor),0))) or 0
+    redeemed=s.scalar(select(func.coalesce(func.sum(Redemption.amount_minor),0))) or 0
+    liability=-(s.scalar(select(func.coalesce(func.sum(Entry.delta_minor),0)).where(
+        Entry.account=='GIFT_LIABILITY')) or 0)
+    paid_orders=s.scalars(select(GiftOrder).where(GiftOrder.status=='PAID')).all()
+    missing=[];unpaid=[];unfunded=[]
+    for o in paid_orders:
+        links=s.scalars(select(OrderCard).where(OrderCard.order_id==o.id)).all()
+        if len(links)!=1:missing.append(o.order_code)
+        if not s.scalar(select(PaymentAttempt.id).where(PaymentAttempt.order_id==o.id,
+                      PaymentAttempt.status=='SUCCESS')):
+            unfunded.append(o.order_code)
+    for link in s.scalars(select(OrderCard)):
+        o=s.get(GiftOrder,link.order_id)
+        if not o or o.status!='PAID':unpaid.append(str(link.order_id))
+    unbalanced=[{'event':key,'delta_minor':total} for key,total in
+        s.execute(select(Entry.event_id,func.sum(Entry.delta_minor)).group_by(Entry.event_id)) if total!=0]
+    paid_total=sum(o.amount_minor for o in paid_orders)
+    all_redemptions=s.scalars(select(Redemption)).all()
+    expected_payable=sum(r.amount_minor-r.fee_minor for r in all_redemptions)
+    expected_fees=sum(r.fee_minor for r in all_redemptions)
+    ledger_payable=-(s.scalar(select(func.coalesce(func.sum(Entry.delta_minor),0)).where(
+        Entry.account.like('MERCHANT_PAYABLE:%'))) or 0)
+    ledger_fees=-(s.scalar(select(func.coalesce(func.sum(Entry.delta_minor),0)).where(
+        Entry.account=='PLATFORM_FEE')) or 0)
+    findings=[]
+    if issued != remaining+redeemed:findings.append('Card issuance / redemption totals do not reconcile')
+    if liability!=remaining:findings.append('Gift liability ledger differs from card balances')
+    if paid_total!=issued:findings.append('Paid order total differs from issued gift value')
+    if expected_payable!=ledger_payable:findings.append('Merchant payable ledger differs from redemptions')
+    if expected_fees!=ledger_fees:findings.append('Platform fee ledger differs from redemptions')
+    if missing:findings.append('Paid orders without exactly one card')
+    if unpaid:findings.append('Cards linked to orders not marked PAID')
+    if unfunded:findings.append('Paid orders without successful payment attempt')
+    if unbalanced:findings.append('Unbalanced ledger events')
+    report={'result':'PASS' if not findings else 'FAIL','as_of':datetime.now(timezone.utc).isoformat(),
+      'cards_issued_etb':etb(issued),'outstanding_etb':etb(remaining),'redeemed_etb':etb(redeemed),
+      'ledger_liability_etb':etb(liability),'paid_orders_etb':etb(paid_total),
+      'merchant_payable_etb':etb(expected_payable),'ledger_merchant_payable_etb':etb(ledger_payable),
+      'platform_fee_etb':etb(expected_fees),'ledger_platform_fee_etb':etb(ledger_fees),
+      'paid_orders_missing_card':missing[:20],'unpaid_card_orders':unpaid[:20],
+      'paid_orders_missing_payment':unfunded[:20],'unbalanced_events':unbalanced[:20],
+      'findings':findings,'disclaimer':'DEMO RECONCILIATION — DOES NOT VERIFY REAL BANK OR PROCESSOR STATEMENTS'}
+    return report
+
+@app.get('/api/admin/fraud-alerts')
+def fraud_alerts(u=Depends(admin),s:Session=Depends(db)):
+    return [{'id':a.id,'control_id':a.control_id,'severity':a.severity,'status':a.status,
+        'title':a.title,'detail':a.detail,'note':a.note,'at':a.created_at.isoformat()}
+        for a in s.scalars(select(FraudAlert).order_by(FraudAlert.id.desc()).limit(150))]
+
+@app.post('/api/admin/fraud-alerts/{alert_id}/review')
+def review_fraud(alert_id:int,body:ReviewFraud,u=Depends(admin),s:Session=Depends(db)):
+    a=s.get(FraudAlert,alert_id)
+    if not a:raise HTTPException(404,'Fraud alert not found')
+    if body.status in ('RESOLVED','FALSE_POSITIVE') and not body.note.strip():
+        raise HTTPException(422,'Review note required before closing alert')
+    a.status=body.status;a.note=body.note.strip();a.reviewed_by=u.id;a.reviewed_at=datetime.now(timezone.utc)
+    audit(s,u,'REVIEW_FRAUD',f'{a.id} {a.status}')
+    s.commit();return {'id':a.id,'status':a.status,'message':'Alert updated'}
+
 @app.get('/api/health')
-def health():return {'status':'ok','mode':'SIMULATION','version':'0.5.0'}
+def health():return {'status':'ok','mode':'SIMULATION','version':'0.6.0'}
 app.mount('/assets',StaticFiles(directory=str(ROOT/'frontend')),name='assets')
 @app.get('/')
 def home():return FileResponse(ROOT/'frontend'/'index.html')
