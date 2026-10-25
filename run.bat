@@ -1,10 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title GiftBridge Ethiopia v0.4 - Local Sandbox
+title GiftBridge Ethiopia v0.5 - Local Sandbox
 
 echo ============================================================
-echo      GiftBridge Ethiopia v0.4 - Local Demo
+echo      GiftBridge Ethiopia v0.5 - Local Demo
 
 echo      NO REAL PAYMENTS OR GIFT VALUE
 
@@ -21,7 +21,7 @@ if not exist ".venv\Scripts\python.exe" (
   if errorlevel 1 goto :error
 )
 
-".venv\Scripts\python.exe" -c "import uvicorn,fastapi,sqlalchemy" >nul 2>nul
+".venv\Scripts\python.exe" -c "import uvicorn,fastapi,sqlalchemy,qrcode" >nul 2>nul
 if errorlevel 1 (
   echo [2/3] Installing required Python packages for first-time setup...
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt

@@ -1,36 +1,34 @@
-# GiftBridge Ethiopia v0.4 — Digital gifting experience (local sandbox)
+# GiftBridge Ethiopia v0.5 — Digital Gifts + Merchant Ecosystem
 
-> **DEVELOPMENT DEMO ONLY — NOT A LIVE FINTECH PRODUCT.** Every checkout and card value is simulated. There are **no real M-PESA, telebirr, Dashen Bank, SMS, physical gift card, custody, settlement, or exchange connections**. The merchant and issuer names in the app are illustrative demonstrations, not partnerships. Do not host this demo on the public internet or use it with real customer information.
+> **LOCAL DEVELOPMENT SANDBOX ONLY.** No real gift value, funds, M-PESA, telebirr, Dashen Bank, SMS, bank settlement, customer identity verification, merchant KYC or business partnerships. Names of existing businesses in demo seed data are **illustrative, not endorsements or integrations**. Never put this demo on the public internet or enter real personal/financial information. `APP_ENV=production` deliberately refuses to start.
 
-GiftBridge is a Windows-friendly FastAPI + vanilla JavaScript application demonstrating merchant-specific and universal gift programs, simulated purchasing, recipient delivery, a wallet, merchant redemption, and merchant administration. v0.4 **extends v0.3**, preserving the core v0.3 tables and gift flows.
+GiftBridge is a FastAPI + PostgreSQL/SQLite + responsive HTML/CSS/JavaScript gifting prototype for Ethiopian merchant-specific and multi-merchant universal gift cards. It runs locally on Windows and demonstrates payments (simulated only), personalized gifts, wallets, partial redemption and merchant workflows.
 
-## What's new in v0.4
+## New in v0.5
 
-- Refreshed responsive storefront with categories, saved favorites, search and merchant descriptions.
-- Persistent favorites for authenticated demo customers.
-- Quick gift denomination buttons, occasion selection, card-theme previews and a live personal-note preview.
-- Premium customer wallet with overall demo balance, search, remaining-value indicators and available/used filters.
-- Share a gift *announcement* using the browser share sheet or clipboard. **A share message does not contain the gift code, PIN or access link.** Recipients still must have a registered GiftBridge demo account; gifts are delivered through their in-app wallet and inbox.
-- Download branded **sandbox purchase and redemption receipts as HTML** (open and Print → Save as PDF). Receipts are permission-checked and watermarked as having no real value.
-- English / Amharic toggle for **primary marketing and navigation labels**. The rest of the interface is currently English: this is *partial localization*, not a fully translated product.
-- Admin can enter program category, short description and gift symbol when publishing a demo gift program.
-- Added automated tests for favorites, program presentation, receipt permissions, ownership and ledger preservation.
-- Updated one-click `run.bat` launcher to recognize version 0.4.0.
+- **Merchant application portal**: registered customers submit business name, category, location, contact and description. An admin approves/rejects, with a visible application timeline and inbox notification. No actual document review/KYC is implemented.
+- **Merchant ownership**: approved applicant becomes the demo merchant **OWNER**, with an automatically created main branch.
+- **Team management**: merchant owners can assign MANAGER or branch-specific CASHIER permissions to *registered accounts*. Managers can assign cashiers; they cannot grant manager/owner access. Owners can deactivate team members. Old v0.4 cashier assignments remain supported.
+- **Merchant gift publishing**: owner/manager can publish merchant-specific campaigns. Universal programs remain restricted to platform admin.
+- **Branch administration**: owner/manager creates branches and ties cashiers to specific branches.
+- **QR-assisted POS**: gift owner can show QR containing the card identifier and separately a five-minute, one-time redemption PIN. Camera scanning with `BarcodeDetector` where supported; fallback to manual card-code entry. Authorized branch is enforced for new cashiers.
+- **Merchant analytics**: last 7/30/90/365 days, merchant-specific gift sales, redeemed value, simulated fees/payables, daily trend and branch breakdown. CSV redemption export from v0.4 remains available.
+- **Audit and compatibility**: new tables for applications, scoped staff and redemption locations without altering old gift/ledger columns. Automated permission, payment, redemption and data-preservation tests.
 
-### Screenshots
+## Screenshots
 
-See `docs/preview-v04-marketplace.png`, `docs/preview-v04-wallet.png` and `docs/preview-v04-mobile.png`. These screenshots are from an instrumented local browser test, not an externally hosted production environment.
+See `docs/preview-v05-merchant-application.png`, `docs/preview-v05-admin-review.png`, `docs/preview-v05-merchant-studio.png`.
 
-## First-time setup: Windows
+## Installation — Windows 11
 
-Requirements: Python 3.11+ installed; modern Windows browser. For GitHub use, Git is optional.
+Requires Python 3.11+ with `python` or `py` in your PATH and an internet connection **on first installation** to download Python packages.
 
-1. Extract the archive; open the **inner `giftbridge` directory** containing `run.bat`.
-2. Double-click `run.bat`. It will create `.venv` if needed, install dependencies when missing, seed demo data, run the server on `127.0.0.1:8000`, and open your browser.
-3. Keep the command window open while using the demo. Press **Ctrl+C** to stop it.
-4. Open `http://127.0.0.1:8000` or `http://127.0.0.1:8000/docs` for API docs.
+1. Extract the ZIP and open its `giftbridge` folder.
+2. Double-click `run.bat` for first-time setup. It creates `.venv`, installs dependencies, seeds demo users and opens the local server.
+3. Open http://127.0.0.1:8000 and leave the terminal window open while using GiftBridge.
+4. Stop with Ctrl+C. The next run is again one click using `run.bat`.
 
-PowerShell equivalent from the project folder:
+Manual PowerShell commands from the GiftBridge project directory:
 
 ```powershell
 python -m venv .venv
@@ -39,78 +37,61 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
 ```
 
-If port 8000 is already in use, close the other GiftBridge instance. The launcher intentionally refuses to open a different or older application responding on that port.
+For an **existing v0.4 project**, read **[UPGRADE_FROM_V04.md](docs/UPGRADE_FROM_V04.md)**. Keep your `.git`, `.venv`, `.env` and `giftbridge.db` untouched and back up the DB before copying the updated code.
 
-### Sample demo accounts
+## Demo accounts
 
-**Only use locally.** All example accounts share the password `DemoPass123!`:
+All seeded local example accounts use password `DemoPass123!`:
 
 | Role | Phone |
-| --- | --- |
-| Admin | `251900000001` |
-| Buyer | `251900000002` |
+|---|---|
+| Platform administrator | `251900000001` |
+| Customer | `251900000002` |
 | Gift recipient | `251900000003` |
-| Queens demo cashier | `251900000004` |
+| Legacy Queens demo cashier | `251900000004` |
 
-## End-to-end demo walkthrough
+For self-service onboarding, register a new customer account, apply as a merchant, switch to the demo admin account to approve it, and sign in as the applicant again.
 
-1. Sign in as Buyer. Browse the gift programs and click the heart to save one.
-2. Filter to **Saved gifts**, then back to **All gifts**; choose a program.
-3. Select ETB 500/1,000/2,000/5,000 or a custom amount, choose a design and occasion, add a personal message, and enter recipient `251900000003`.
-4. Click **Proceed to demo checkout**. Select a *simulated* channel and click **Simulate successful payment**.
-5. The gift is created once, and you can download a **sandbox HTML receipt**, or share an announcement without revealing redeem credentials.
-6. Sign out; sign in as Recipient. The gift is visible in **Inbox** and **My wallet**. Open the gift, view its message, and generate a single-use eight-digit redemption PIN.
-7. Sign out; sign in as Cashier. Use the gift code and freshly generated PIN to partially redeem the gift at a participating demo merchant.
-8. Download the redemption receipt; inspect the merchant dashboard and remaining gift balance.
-9. Repeat checkout with **Simulate failed payment**, and retry using **My orders**. Failed payments create no gift.
+## Full demo workflow
 
-### What is actually enforced
+1. Merchant owner applies through **Become a merchant**.
+2. Admin approves through **Management**; the merchant gets a primary branch.
+3. Merchant owner publishes a gift and assigns registered cashiers to specific branches.
+4. Customer selects a gift, occasion, design, recipient, amount and personal message.
+5. Checkout simulates **SUCCESS** or **FAILED**. Only SUCCESS issues a card; repeated success does not duplicate value.
+6. Recipient receives an in-app inbox notification and opens the gift in **My wallet**.
+7. Recipient requests **Redeem PIN**. The modal displays an 8-digit, 5-minute PIN and QR card identifier. PIN is never encoded in the QR.
+8. Cashier selects their branch, scans/enters card code and PIN, and redeems part or all of the demo balance.
+9. Merchant owner checks historical redemptions, branch breakdown, trends, and simulated payable amounts.
 
-- Buyer permission on purchase receipts; recipient/assigned cashier/admin permission on redemption receipts.
-- Favorites are unique per account and only authenticated users can change them.
-- Demo payments are processed once; unsuccessful attempts cannot create gift cards.
-- Authorized merchants and a short-lived owner-issued PIN are required for redemption.
-- Atomic balance debit prevents overspending under competing requests in supported transaction conditions.
-- Balanced **simulated** ledger entries for issuance and redemption; merchant fee is for illustration only.
-
-### What is not implemented
-
-Actual monetary or financial settlement, issuing bank integrations, physical card scanning and issuer verification, SMS sending, secure gift claim links to unregistered recipients, OTP phone verification, real merchant onboarding/KYC, exchanges/resale, group funding, scheduled delivery, production user security, fully translated Amharic UI, native mobile apps or hosted production deployment.
-
-## Existing v0.3 users: IMPORTANT
-
-Read [`docs/UPGRADE_FROM_V03.md`](docs/UPGRADE_FROM_V03.md). Do **not** remove or replace your `.git`, `.venv`, `.env` or `giftbridge.db` file. Make a database backup before copying source files. The code adds optional supporting tables, and does not alter existing v0.3 `cards`, `gift_orders` or `redemptions` columns.
-
-## Automated tests
+## Automated testing
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Tests use a separate temporary database (not `giftbridge.db`). Developer validation also includes a browser-harness walkthrough. The screenshots are examples, not substitutes for testing in your environment.
+The tests use a disposable SQLite database outside your project. They cover merchant application approval/rejection, authorization, owner/manager/cashier powers, branch scoping, QR generation, duplicate transaction protection, ledger balancing, existing v0.4 functionality, and private receipts. A separate browser harness has been used to walk through application → approval → merchant studio.
 
-## Project structure
+## Repository layout
 
 ```text
 giftbridge/
-  backend/main.py           # SQLAlchemy schema and FastAPI endpoints
-  backend/seed.py           # Idempotent demo data
-  frontend/index.html       # Customer, merchant, admin UI
-  frontend/style.css        # Responsive product design
-  frontend/app.js           # UI flows, receipts, localization
-  tests/test_flows.py       # API integration suite
-  docs/UPGRADE_FROM_V03.md  # Windows / GitHub update instructions
-  launcher.py               # Browser and server readiness
-  run.bat                   # Windows one-click startup
-  requirements.txt
-  docker-compose.yml        # Optional local Docker demo
+  backend/main.py           # FastAPI endpoints, permissions, DB models
+  backend/seed.py           # Demo accounts and programs
+  frontend/index.html       # Customer, merchant, admin and POS pages
+  frontend/app.js           # Core customer/checkout/redemption JS
+  frontend/merchant-v05.js  # Merchant v0.5 forms, reports, QR camera
+  frontend/style.css        # Responsive styling
+  tests/                    # Automated API tests
+  docs/UPGRADE_FROM_V04.md  # Preservation and upgrade instructions
+  launcher.py               # Browser/server launcher
+  run.bat                   # Windows one-click development server
 ```
 
-### Local-only security statement
+## Real-world limitations and security caveats
 
-FastAPI tokens use a development-only secret by default. Example accounts use published passwords; phone registration does not verify phone ownership; browser tokens are kept in session storage. Do not put real customer, bank or gift-card secrets into this prototype. The backend intentionally raises an error when `APP_ENV=production`.
+This is a demonstrator, **not production-ready fintech**. There is no phone verification, legally adequate business verification/KYC, bank/card/payment gateway, cash custody, tax invoicing, real merchant settlement, physical-card digitization, gift resale/exchange, or verified electronic delivery to unregistered people. Auth uses a development-only JWT secret and browser session storage; default demo accounts are known. Customer balance and simulated ledger use SQLite in the default local setup. Bank-grade concurrency, signed payment webhooks, fraud prevention, secrets and key management, legal review, data protection controls, accessibility audit and external security testing are still required. Do not use with real customers or real money.
 
-Before a real rollout you would need verified user identity, hardened authentication and session management, TLS, secret rotation, audits, rate limits, monitoring, a payment partner's signed callback flows, payment and gift reconciliation, security testing, operational controls, legal review, and necessary licensing or regulated partners.
+Merchant staff permissions in this version are for the **demo merchant ecosystem**. Older v0.4 admins can still create a merchant manually without assigning an owner. Older demo cashier grants remain valid for backward compatibility and don't have historical branch details.
 
----
-**GiftBridge Ethiopia — Make gifting feel personal.**
+**GiftBridge Ethiopia — Send moments, not just money.**

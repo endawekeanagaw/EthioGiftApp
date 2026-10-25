@@ -1,8 +1,9 @@
-"""GiftBridge Ethiopia v0.4 — local demonstration only; no actual money or gift value."""
+"""GiftBridge Ethiopia v0.5 — local demonstration only; no actual money or gift value."""
 import base64
 import hashlib
 import hmac
 import json
+import io
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -191,8 +192,41 @@ class MerchantBranch(Base):
     city: Mapped[str] = mapped_column(String(100),default='Addis Ababa')
     active: Mapped[int] = mapped_column(Integer,default=1)
 
+class MerchantApplication(Base):
+    __tablename__ = 'merchant_applications'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    applicant_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    business_name: Mapped[str] = mapped_column(String(120))
+    category: Mapped[str] = mapped_column(String(40))
+    city: Mapped[str] = mapped_column(String(100))
+    contact_phone: Mapped[str] = mapped_column(String(30))
+    description: Mapped[str] = mapped_column(String(350), default='')
+    status: Mapped[str] = mapped_column(String(20), default='PENDING')
+    review_note: Mapped[str] = mapped_column(String(350), default='')
+    merchant_id: Mapped[Optional[int]] = mapped_column(ForeignKey('merchants.id'), nullable=True)
+    reviewed_by: Mapped[Optional[int]] = mapped_column(ForeignKey('users.id'), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class MerchantMembership(Base):
+    __tablename__ = 'merchant_memberships'
+    __table_args__ = (UniqueConstraint('merchant_id', 'user_id'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey('merchants.id'))
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    role: Mapped[str] = mapped_column(String(20))  # OWNER, MANAGER or CASHIER
+    branch_id: Mapped[Optional[int]] = mapped_column(ForeignKey('merchant_branches.id'), nullable=True)
+    active: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class RedemptionLocation(Base):
+    __tablename__ = 'redemption_locations'
+    redemption_id: Mapped[int] = mapped_column(ForeignKey('redemptions.id'), primary_key=True)
+    branch_id: Mapped[Optional[int]] = mapped_column(ForeignKey('merchant_branches.id'), nullable=True)
+    cashier_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+
 Base.metadata.create_all(engine)
-app = FastAPI(title='GiftBridge Ethiopia · Sandbox MVP',version='0.4.0',description='Only SIMULATED payments, card value, and settlement. Do not use with real money.')
+app = FastAPI(title='GiftBridge Ethiopia · Sandbox MVP',version='0.5.0',description='Only SIMULATED payments, card value, and settlement. Do not use with real money.')
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:8000','http://127.0.0.1:8000'],allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 
 def db():
@@ -295,6 +329,7 @@ class Redeem(BaseModel):
     amount_etb:Decimal
     idempotency_key:str=Field(min_length=8,max_length=100)
     redeem_pin:str=Field(min_length=8,max_length=8,pattern=r'^\d{8}$')
+    branch_id:Optional[int]=None
 
 @app.post('/api/auth/register')
 def register(body:Register,s:Session=Depends(db)):
@@ -372,6 +407,28 @@ def new_program(body:NewProgram,u=Depends(admin),s:Session=Depends(db)):
     for mid in mids:s.add(Acceptance(program_id=p.id,merchant_id=mid))
     audit(s,u,'CREATE_PROGRAM',f'{p.id} {p.name}');s.commit()
     return {'id':p.id,'message':'Gift program published successfully'}
+def membership(s:Session, user_id:int, merchant_id:int):
+    return s.scalar(select(MerchantMembership).where(MerchantMembership.user_id==user_id,
+        MerchantMembership.merchant_id==merchant_id, MerchantMembership.active==1))
+
+def has_merchant_role(u:User,s:Session,merchant_id:int,roles:tuple[str,...]=('OWNER','MANAGER','CASHIER')):
+    if u.role=='admin':return True
+    member=membership(s,u.id,merchant_id)
+    if member:return member.role in roles
+    # An explicitly disabled membership must not be bypassed through legacy cashier grants.
+    disabled=s.scalar(select(MerchantMembership).where(MerchantMembership.user_id==u.id,
+        MerchantMembership.merchant_id==merchant_id, MerchantMembership.active==0))
+    if disabled:return False
+    # Old v0.2–0.4 cashier records remain valid for POS access and legacy reports.
+    return 'CASHIER' in roles and s.scalar(select(MerchantStaff.id).where(
+        MerchantStaff.user_id==u.id, MerchantStaff.merchant_id==merchant_id)) is not None
+
+def ensure_merchant_role(u:User,s:Session,merchant_id:int,roles=('OWNER','MANAGER','CASHIER')):
+    m=s.get(Merchant,merchant_id)
+    if not m or m.status!='ACTIVE':raise HTTPException(404,'Active merchant not found')
+    if not has_merchant_role(u,s,merchant_id,roles):raise HTTPException(403,'Not authorized for this merchant')
+    return m
+
 @app.post('/api/admin/staff')
 def add_staff(body:NewStaff,u=Depends(admin),s:Session=Depends(db)):
     target=s.scalar(select(User).where(User.phone==body.user_phone.strip()))
@@ -386,7 +443,15 @@ def add_staff(body:NewStaff,u=Depends(admin),s:Session=Depends(db)):
 @app.get('/api/staff/merchants')
 def staff_merchants(u=Depends(current),s:Session=Depends(db)):
     if u.role=='admin':return [{'id':m.id,'name':m.name} for m in s.scalars(select(Merchant).where(Merchant.status=='ACTIVE'))]
-    return [{'id':m.id,'name':m.name} for m in s.scalars(select(Merchant).join(MerchantStaff,Merchant.id==MerchantStaff.merchant_id).where(MerchantStaff.user_id==u.id,Merchant.status=='ACTIVE'))]
+    accessible={}
+    for item in s.scalars(select(MerchantMembership).where(MerchantMembership.user_id==u.id,MerchantMembership.active==1)):
+        m=s.get(Merchant,item.merchant_id)
+        if m and m.status=='ACTIVE':accessible[m.id]={'id':m.id,'name':m.name,'role':item.role,'branch_id':item.branch_id}
+    for m in s.scalars(select(Merchant).join(MerchantStaff,Merchant.id==MerchantStaff.merchant_id).where(MerchantStaff.user_id==u.id,Merchant.status=='ACTIVE')):
+        if not s.scalar(select(MerchantMembership.id).where(MerchantMembership.user_id==u.id,
+                MerchantMembership.merchant_id==m.id,MerchantMembership.active==0)):
+            accessible.setdefault(m.id,{'id':m.id,'name':m.name,'role':'CASHIER','branch_id':None})
+    return [{'id':v['id'],'name':v['name']} for v in accessible.values()]
 @app.post('/api/orders')
 def create_order(body:OrderIn,u=Depends(current),s:Session=Depends(db)):
     p=s.get(Program,body.program_id)
@@ -485,8 +550,7 @@ def redemption_receipt(redemption_id:int,u=Depends(current),s:Session=Depends(db
     if not r:raise HTTPException(404,'Receipt not found')
     card=s.get(Card,r.card_id)
     authorized=(u.role=='admin' or card.owner_id==u.id or
-        (u.role=='merchant' and s.scalar(select(MerchantStaff).where(
-            MerchantStaff.user_id==u.id,MerchantStaff.merchant_id==r.merchant_id)) is not None))
+        has_merchant_role(u,s,r.merchant_id))
     if not authorized:raise HTTPException(404,'Receipt not found')
     return {'receipt_type':'REDEMPTION','demo_only':True,'reference':'GBR-'+str(r.id).zfill(7),
         'merchant':s.get(Merchant,r.merchant_id).name,
@@ -524,12 +588,22 @@ def send(card_id:int,body:Send,u=Depends(current),s:Session=Depends(db)):
     return {'message':'Gift sent successfully!','recipient':target.name}
 @app.post('/api/redemptions')
 def redeem(body:Redeem,u=Depends(current),s:Session=Depends(db)):
-    if u.role not in ('admin','merchant'):raise HTTPException(403,'Only a demo cashier or admin can redeem gifts')
-    if u.role=='merchant' and not s.scalar(select(MerchantStaff).where(MerchantStaff.user_id==u.id,MerchantStaff.merchant_id==body.merchant_id)):
-        raise HTTPException(403,'You are not assigned to this merchant')
+    ensure_merchant_role(u,s,body.merchant_id)
+    branch=None
+    if body.branch_id is not None:
+        branch=s.get(MerchantBranch,body.branch_id)
+        if not branch or branch.merchant_id!=body.merchant_id or not branch.active:
+            raise HTTPException(403,'Branch is not active for this merchant')
+    member=membership(s,u.id,body.merchant_id)
+    if member and member.role=='CASHIER':
+        if member.branch_id is None or body.branch_id!=member.branch_id:
+            raise HTTPException(403,'Cashier must redeem at their assigned branch')
     amount=money(body.amount_etb)
     existing=s.scalar(select(Redemption).where(Redemption.idempotency_key==body.idempotency_key))
     if existing:
+        location=s.get(RedemptionLocation,existing.id)
+        if location and (location.cashier_id!=u.id or location.branch_id!=body.branch_id):
+            raise HTTPException(409,'Idempotency key belongs to a different POS transaction')
         if existing.merchant_id!=body.merchant_id or existing.amount_minor!=amount or s.get(Card,existing.card_id).public_id!=body.card_code.strip():
             raise HTTPException(409,'Idempotency key already used for a different redemption')
         return {'id':existing.id,'receipt':'GBR-'+str(existing.id).zfill(7),'status':'ALREADY_PROCESSED','balance_etb':etb(s.get(Card,existing.card_id).balance_minor)}
@@ -561,14 +635,14 @@ def redeem(body:Redeem,u=Depends(current),s:Session=Depends(db)):
     redeem_pass.consumed=1
     fee=amount*3//100
     r=Redemption(card_id=c.id,merchant_id=body.merchant_id,amount_minor=amount,fee_minor=fee,idempotency_key=body.idempotency_key)
-    s.add(r);s.flush();event='REDEEM-'+str(r.id)
+    s.add(r);s.flush();s.add(RedemptionLocation(redemption_id=r.id,branch_id=branch.id if branch else None,cashier_id=u.id));event='REDEEM-'+str(r.id)
     entry(s,event,'GIFT_LIABILITY',amount)
     entry(s,event,'MERCHANT_PAYABLE:'+str(body.merchant_id),-(amount-fee))
     entry(s,event,'PLATFORM_FEE',-fee)
     s.add(GiftNotification(user_id=c.owner_id,title='Gift redeemed successfully ✓',body=f'{etb(amount):,.2f} ETB spent at {merchant.name}. Remaining: {etb(c.balance_minor):,.2f} ETB.',card_id=c.id,event_type='REDEEMED'))
     audit(s,u,'REDEEM',f'{c.public_id} {amount}')
     s.commit()
-    return {'id':r.id,'receipt':'GBR-'+str(r.id).zfill(7),'merchant':merchant.name,'status':'CAPTURED','amount_etb':etb(amount),'balance_etb':etb(c.balance_minor),'merchant_payable_etb':etb(amount-fee)}
+    return {'id':r.id,'receipt':'GBR-'+str(r.id).zfill(7),'merchant':merchant.name,'status':'CAPTURED','amount_etb':etb(amount),'balance_etb':etb(c.balance_minor),'merchant_payable_etb':etb(amount-fee),'branch':branch.name if branch else 'Unspecified'}
 @app.get('/api/admin/overview')
 def overview(u=Depends(admin),s:Session=Depends(db)):
     return {'merchants':s.scalar(select(func.count()).select_from(Merchant)),
@@ -647,11 +721,7 @@ def list_branches(merchant_id:Optional[int]=None,s:Session=Depends(db)):
     return [{'id':b.id,'merchant_id':b.merchant_id,'name':b.name,'city':b.city} for b in s.scalars(q.order_by(MerchantBranch.id))]
 
 def merchant_permission(u,s,merchant_id):
-    m=s.get(Merchant,merchant_id)
-    if not m or m.status!='ACTIVE':raise HTTPException(404,'Merchant not found')
-    if u.role!='admin' and not s.scalar(select(MerchantStaff.id).where(MerchantStaff.user_id==u.id,MerchantStaff.merchant_id==merchant_id)):
-        raise HTTPException(403,'Not assigned to this merchant')
-    return m
+    return ensure_merchant_role(u,s,merchant_id,('OWNER','MANAGER','CASHIER'))
 
 @app.get('/api/merchant/overview')
 def merchant_overview(merchant_id:int,u=Depends(current),s:Session=Depends(db)):
@@ -677,8 +747,223 @@ def wallet_summary(u=Depends(current),s:Session=Depends(db)):
     return {'cards':len(cards),'active_cards':sum(c.balance_minor>0 for c in cards),
             'balance_etb':etb(sum(c.balance_minor for c in cards))}
 
+# === v0.5 Merchant Ecosystem: KYC-style demo intake, manual review, staff scopes, POS branches ===
+MERCHANT_CATEGORIES=('SUPERMARKET','RESTAURANT','CAFE','HOTEL','RETAIL','BOOKSTORE','OTHER')
+
+class MerchantApply(BaseModel):
+    business_name:str=Field(min_length=3,max_length=120)
+    category:str=Field(default='RETAIL')
+    city:str=Field(min_length=2,max_length=100)
+    contact_phone:str=Field(min_length=7,max_length=30)
+    description:str=Field(default='',max_length=350)
+
+class ReviewApplication(BaseModel):
+    decision:str=Field(pattern='^(APPROVED|REJECTED)$')
+    note:str=Field(default='',max_length=350)
+
+class TeamInvite(BaseModel):
+    merchant_id:int
+    user_phone:str
+    role:str=Field(pattern='^(MANAGER|CASHIER)$')
+    branch_id:Optional[int]=None
+
+class TeamStatus(BaseModel):
+    active:bool
+
+class MerchantGiftProgram(BaseModel):
+    merchant_id:int
+    name:str=Field(min_length=2,max_length=120)
+    category:str=Field(default='SHOPPING')
+    description:str=Field(default='',max_length=240)
+    emoji:str=Field(default='🎁',max_length=12)
+
+
+def application_out(a:MerchantApplication,s:Session):
+    user=s.get(User,a.applicant_id)
+    return {'id':a.id,'business_name':a.business_name,'category':a.category,'city':a.city,
+        'contact_phone':a.contact_phone,'description':a.description,'status':a.status,
+        'review_note':a.review_note,'merchant_id':a.merchant_id,'applicant_name':user.name,
+        'applicant_phone':user.phone,'submitted_at':a.created_at.isoformat()}
+
+@app.get('/api/merchant/access')
+def my_merchant_access(u=Depends(current),s:Session=Depends(db)):
+    if u.role=='admin':
+        return [{'id':m.id,'name':m.name,'role':'ADMIN','branch_id':None} for m in s.scalars(
+            select(Merchant).where(Merchant.status=='ACTIVE'))]
+    accessible={}
+    for item in s.scalars(select(MerchantMembership).where(MerchantMembership.user_id==u.id,MerchantMembership.active==1)):
+        m=s.get(Merchant,item.merchant_id)
+        if m and m.status=='ACTIVE':accessible[m.id]={'id':m.id,'name':m.name,'role':item.role,'branch_id':item.branch_id}
+    for m in s.scalars(select(Merchant).join(MerchantStaff,Merchant.id==MerchantStaff.merchant_id).where(
+            MerchantStaff.user_id==u.id,Merchant.status=='ACTIVE')):
+        if not s.scalar(select(MerchantMembership.id).where(MerchantMembership.user_id==u.id,
+                MerchantMembership.merchant_id==m.id,MerchantMembership.active==0)):
+            accessible.setdefault(m.id,{'id':m.id,'name':m.name,'role':'CASHIER','branch_id':None})
+    return list(accessible.values())
+
+@app.post('/api/merchant/applications',status_code=201)
+def merchant_apply(body:MerchantApply,u=Depends(current),s:Session=Depends(db)):
+    name=body.business_name.strip();city=body.city.strip();phone=body.contact_phone.strip()
+    if not name or not city or not phone:raise HTTPException(422,'Name, city and contact required')
+    if body.category not in MERCHANT_CATEGORIES:raise HTTPException(422,'Unknown category')
+    if s.scalar(select(Merchant).where(func.lower(Merchant.name)==name.lower())):
+        raise HTTPException(409,'Merchant name is already registered')
+    pending=s.scalar(select(MerchantApplication).where(func.lower(MerchantApplication.business_name)==name.lower(),
+        MerchantApplication.status=='PENDING'))
+    if pending:raise HTTPException(409,'An application for this business is already awaiting review')
+    a=MerchantApplication(applicant_id=u.id,business_name=name,category=body.category,city=city,
+        contact_phone=phone,description=body.description.strip())
+    s.add(a);s.flush();audit(s,u,'MERCHANT_APPLICATION',f'Application #{a.id} {name}');s.commit()
+    return application_out(a,s)
+
+@app.get('/api/merchant/applications/my')
+def my_applications(u=Depends(current),s:Session=Depends(db)):
+    return [application_out(a,s) for a in s.scalars(select(MerchantApplication).where(
+        MerchantApplication.applicant_id==u.id).order_by(MerchantApplication.id.desc()))]
+
+@app.get('/api/admin/applications')
+def review_queue(status:Optional[str]=None,u=Depends(admin),s:Session=Depends(db)):
+    query=select(MerchantApplication)
+    if status:
+        if status not in ('PENDING','APPROVED','REJECTED'):raise HTTPException(422,'Invalid status')
+        query=query.where(MerchantApplication.status==status)
+    return [application_out(a,s) for a in s.scalars(query.order_by(MerchantApplication.id.desc()))]
+
+@app.post('/api/admin/applications/{application_id}/review')
+def decide_application(application_id:int,body:ReviewApplication,u=Depends(admin),s:Session=Depends(db)):
+    a=s.scalar(select(MerchantApplication).where(MerchantApplication.id==application_id).with_for_update())
+    if not a:raise HTTPException(404,'Application not found')
+    if a.status!='PENDING':raise HTTPException(409,'Application already reviewed')
+    if body.decision=='REJECTED' and not body.note.strip():raise HTTPException(422,'Provide a reason for rejection')
+    if body.decision=='APPROVED':
+        if s.scalar(select(Merchant).where(func.lower(Merchant.name)==a.business_name.lower())):
+            raise HTTPException(409,'A merchant with that name already exists')
+        merchant=Merchant(name=a.business_name,status='ACTIVE');s.add(merchant);s.flush()
+        s.add(MerchantMembership(user_id=a.applicant_id,merchant_id=merchant.id,role='OWNER'))
+        s.add(MerchantBranch(merchant_id=merchant.id,name='Main branch',city=a.city))
+        a.merchant_id=merchant.id
+        s.add(GiftNotification(user_id=a.applicant_id,title='Merchant application approved ✓',
+            body=f'{a.business_name} is approved in the GiftBridge demo. Open Merchant studio to set up your shop.',event_type='MERCHANT_APPROVED'))
+    else:
+        s.add(GiftNotification(user_id=a.applicant_id,title='Merchant application update',
+            body=f'{a.business_name}: application declined. {body.note.strip()}',event_type='MERCHANT_REJECTED'))
+    a.status=body.decision;a.review_note=body.note.strip();a.reviewed_at=datetime.now(timezone.utc);a.reviewed_by=u.id
+    audit(s,u,'REVIEW_MERCHANT_APPLICATION',f'{a.id} {body.decision}');s.commit()
+    return application_out(a,s)
+
+@app.get('/api/merchant/team')
+def merchant_team(merchant_id:int,u=Depends(current),s:Session=Depends(db)):
+    ensure_merchant_role(u,s,merchant_id,('OWNER','MANAGER'))
+    rows=s.scalars(select(MerchantMembership).where(MerchantMembership.merchant_id==merchant_id).order_by(MerchantMembership.id)).all()
+    result=[]
+    for t in rows:
+        member_user=s.get(User,t.user_id)
+        branch=s.get(MerchantBranch,t.branch_id) if t.branch_id else None
+        result.append({'id':t.id,'name':member_user.name,'phone':member_user.phone,'role':t.role,
+            'active':bool(t.active),'branch_id':t.branch_id,'branch':branch.name if branch else None})
+    # Legacy cashiers remain authorized; managers can migrate them to scoped memberships if desired.
+    return result
+
+@app.post('/api/merchant/team')
+def invite_team(body:TeamInvite,u=Depends(current),s:Session=Depends(db)):
+    ensure_merchant_role(u,s,body.merchant_id,('OWNER','MANAGER'))
+    manager=membership(s,u.id,body.merchant_id)
+    if u.role!='admin' and manager and manager.role=='MANAGER' and body.role!='CASHIER':
+        raise HTTPException(403,'Managers may assign only cashiers')
+    target=s.scalar(select(User).where(User.phone==body.user_phone.strip()))
+    if not target:raise HTTPException(404,'Staff member must register a GiftBridge demo account first')
+    if target.role=='admin':raise HTTPException(409,'Do not assign platform administrators')
+    branch=None
+    if body.role=='CASHIER':
+        branch=s.get(MerchantBranch,body.branch_id) if body.branch_id else None
+        if not branch or branch.merchant_id!=body.merchant_id or not branch.active:
+            raise HTTPException(422,'Cashier requires an active branch of this merchant')
+    elif body.branch_id is not None:raise HTTPException(422,'Manager assignment is merchant-wide')
+    existing=s.scalar(select(MerchantMembership).where(MerchantMembership.merchant_id==body.merchant_id,
+        MerchantMembership.user_id==target.id))
+    if existing:
+        if existing.role=='OWNER':raise HTTPException(403,'Owner access cannot be changed')
+        existing.role=body.role;existing.branch_id=body.branch_id;existing.active=1
+    else:
+        s.add(MerchantMembership(merchant_id=body.merchant_id,user_id=target.id,role=body.role,branch_id=body.branch_id))
+    audit(s,u,'ASSIGN_MERCHANT_TEAM',f'{body.merchant_id} user {target.id} {body.role}');s.commit()
+    return {'message':'Team member saved','phone':target.phone,'role':body.role}
+
+@app.patch('/api/merchant/team/{membership_id}')
+def update_team(membership_id:int,body:TeamStatus,u=Depends(current),s:Session=Depends(db)):
+    item=s.get(MerchantMembership,membership_id)
+    if not item:raise HTTPException(404,'Team member not found')
+    ensure_merchant_role(u,s,item.merchant_id,('OWNER','MANAGER'))
+    if item.role=='OWNER':raise HTTPException(403,'Cannot deactivate merchant owner')
+    actor=membership(s,u.id,item.merchant_id)
+    if actor and actor.role=='MANAGER' and item.role!='CASHIER' and u.role!='admin':
+        raise HTTPException(403,'Managers cannot edit other managers')
+    item.active=int(body.active)
+    audit(s,u,'UPDATE_MERCHANT_TEAM',f'{item.id} active={item.active}');s.commit()
+    return {'id':item.id,'active':bool(item.active)}
+
+@app.post('/api/merchant/branches')
+def merchant_create_branch(body:NewBranch,u=Depends(current),s:Session=Depends(db)):
+    ensure_merchant_role(u,s,body.merchant_id,('OWNER','MANAGER'))
+    if not body.name.strip() or not body.city.strip():raise HTTPException(422,'Valid branch and city required')
+    branch=MerchantBranch(merchant_id=body.merchant_id,name=body.name.strip(),city=body.city.strip())
+    s.add(branch);s.flush();audit(s,u,'CREATE_MERCHANT_BRANCH',f'{branch.merchant_id} {branch.id}');s.commit()
+    return {'id':branch.id,'name':branch.name,'city':branch.city}
+
+@app.post('/api/merchant/programs')
+def merchant_create_program(body:MerchantGiftProgram,u=Depends(current),s:Session=Depends(db)):
+    ensure_merchant_role(u,s,body.merchant_id,('OWNER','MANAGER'))
+    if body.category not in GIFT_CATEGORIES or body.category=='UNIVERSAL':raise HTTPException(422,'Invalid merchant gift category')
+    p=Program(name=body.name.strip(),kind='MERCHANT_SPECIFIC',merchant_id=body.merchant_id,active=1)
+    s.add(p);s.flush()
+    s.add(Acceptance(program_id=p.id,merchant_id=body.merchant_id))
+    s.add(ProgramAppearance(program_id=p.id,category=body.category,description=body.description.strip(),emoji=body.emoji.strip() or '🎁'))
+    audit(s,u,'MERCHANT_PUBLISH_PROGRAM',f'{p.id} merchant {body.merchant_id}');s.commit()
+    return {'id':p.id,'name':p.name,'message':'Merchant gift published (simulation only)'}
+
+@app.get('/api/merchant/report')
+def merchant_report(merchant_id:int,days:int=30,u=Depends(current),s:Session=Depends(db)):
+    m=ensure_merchant_role(u,s,merchant_id,('OWNER','MANAGER'))
+    if days not in (7,30,90,365):raise HTTPException(422,'Use 7, 30, 90 or 365 days')
+    start=datetime.now(timezone.utc)-timedelta(days=days)
+    rs=s.scalars(select(Redemption).where(Redemption.merchant_id==m.id,Redemption.created_at>=start)).all()
+    # Count only paid merchant-specific programs owned by this merchant; universal funds belong to external program issuer.
+    sold=s.execute(select(GiftOrder.amount_minor).join(Program,GiftOrder.program_id==Program.id).where(
+        Program.merchant_id==m.id,Program.kind=='MERCHANT_SPECIFIC',GiftOrder.status=='PAID',
+        GiftOrder.created_at>=start)).all()
+    buckets={}
+    branch_stats={}
+    for r in rs:
+        day=r.created_at.date().isoformat()
+        buckets[day]=buckets.get(day,0)+r.amount_minor
+        location=s.get(RedemptionLocation,r.id)
+        label=s.get(MerchantBranch,location.branch_id).name if location and location.branch_id else 'Unspecified'
+        item=branch_stats.setdefault(label,{'branch':label,'transactions':0,'gross_minor':0})
+        item['transactions']+=1;item['gross_minor']+=r.amount_minor
+    gross=sum(r.amount_minor for r in rs);fees=sum(r.fee_minor for r in rs)
+    return {'merchant_id':m.id,'merchant':m.name,'days':days,'transactions':len(rs),
+        'merchant_specific_sales_etb':etb(sum(row[0] for row in sold)),
+        'redeemed_etb':etb(gross),'fee_etb':etb(fees),'estimated_payable_etb':etb(gross-fees),
+        'daily':[{'date':date,'redeemed_etb':etb(v)} for date,v in sorted(buckets.items())],
+        'branches':[{'branch':v['branch'],'transactions':v['transactions'],'redeemed_etb':etb(v['gross_minor'])}
+            for v in sorted(branch_stats.values(),key=lambda x:-x['gross_minor'])],
+        'disclaimer':'SIMULATED ONLY — NO REAL SETTLEMENT OR PAYMENT'}
+
+@app.get('/api/cards/{card_id}/qr')
+def gift_code_qr(card_id:int,u=Depends(current),s:Session=Depends(db)):
+    """QR stores only a card identifier; cashier separately verifies owner-issued one-time PIN."""
+    c=s.scalar(select(Card).where(Card.id==card_id,Card.owner_id==u.id))
+    if not c:raise HTTPException(404,'Card not found in your wallet')
+    if c.balance_minor<=0:raise HTTPException(409,'Gift has no balance')
+    import qrcode
+    qr=qrcode.QRCode(version=None,box_size=6,border=3, error_correction=qrcode.constants.ERROR_CORRECT_M)
+    qr.add_data('GB-CARD:'+c.public_id);qr.make(fit=True)
+    stream=io.BytesIO();qr.make_image(fill_color='#184c36',back_color='#ffffff').save(stream,format='PNG')
+    return {'card_code':c.public_id,'png_base64':base64.b64encode(stream.getvalue()).decode(),
+        'note':'QR identifies the card only; the owner must separately provide a fresh one-time PIN.'}
+
 @app.get('/api/health')
-def health():return {'status':'ok','mode':'SIMULATION','version':'0.4.0'}
+def health():return {'status':'ok','mode':'SIMULATION','version':'0.5.0'}
 app.mount('/assets',StaticFiles(directory=str(ROOT/'frontend')),name='assets')
 @app.get('/')
 def home():return FileResponse(ROOT/'frontend'/'index.html')

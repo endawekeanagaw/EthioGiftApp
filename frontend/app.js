@@ -1,10 +1,11 @@
 'use strict';
 let token=sessionStorage.getItem('gb_token');
 let user=JSON.parse(sessionStorage.getItem('gb_user')||'null');
+let merchantAccess=[], scannerStream=null, scanLoopActive=false;
 let programList=[],merchantList=[],cashierMerchants=[],authMode='login',selectedOrder=null,workingPayment=false,selectedDesign='emerald',catalogFilter='ALL',categoryFilter='ALL',favoriteIds=new Set(),merchantRows=[],walletItems=[];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const money=n=>'ETB '+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const money=n=>'ETB '+(Math.abs(Number(n))<0.005?0:Number(n)).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const makeKey=()=>globalThis.crypto?.randomUUID?.()||'GB-'+Math.random().toString(36).slice(2)+Date.now();
 function notify(message,bad=false){$('notice').textContent=message;$('notice').classList.toggle('error',bad);}
 async function api(path,method='GET',body){
@@ -28,17 +29,18 @@ $('authForm').onsubmit=event=>handleForm(event,async()=>{
 });
 function logout(){sessionStorage.removeItem('gb_token');sessionStorage.removeItem('gb_user');token=null;user=null;selectedOrder=null;$('auth').hidden=false;$('dashboard').hidden=true;$('logout').hidden=true;$('userChip').hidden=true;closeAllModals();notify('Signed out successfully.');}
 $('logout').onclick=logout;
-function tab(id){const b=document.querySelector(`[data-tab="${id}"]`);if(!b||b.hidden)return;document.querySelectorAll('[data-tab]').forEach(n=>n.classList.toggle('active',n===b));document.querySelectorAll('.view').forEach(n=>n.hidden=n.id!==id);if(id==='orders')loadOrders();if(id==='wallet')loadWallet();if(id==='admin')loadAdmin();if(id==='inbox')loadInbox();if(id==='merchant')loadMerchant();}
+function tab(id){const b=document.querySelector(`[data-tab="${id}"]`);if(!b||b.hidden)return;document.querySelectorAll('[data-tab]').forEach(n=>n.classList.toggle('active',n===b));document.querySelectorAll('.view').forEach(n=>n.hidden=n.id!==id);if(id==='orders')loadOrders();if(id==='wallet')loadWallet();if(id==='admin')loadAdmin();if(id==='inbox')loadInbox();if(id==='merchant'){loadMerchant();loadMerchantTools();}if(id==='business')loadMerchantApplications();if(id==='admin')loadApplicationQueue();if(id!=='redeem')stopQrScanner();}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.tab));
 async function start(){
   if(!token)return;
   const me=await api('/me');user=me;sessionStorage.setItem('gb_user',JSON.stringify(me));
   $('auth').hidden=true;$('dashboard').hidden=false;$('logout').hidden=false;$('userChip').hidden=false;
   $('userChip').textContent=me.name+' · '+me.role;$('welcome').textContent='Hello, '+me.name.split(' ')[0]+' 👋';
-  $('adminTab').hidden=me.role!=='admin';$('posTab').hidden=!['admin','merchant'].includes(me.role);$('merchantTab').hidden=!['admin','merchant'].includes(me.role);$('senderName').value=me.name;
+  merchantAccess=await api('/merchant/access');
+  $('adminTab').hidden=me.role!=='admin';$('posTab').hidden=merchantAccess.length===0;$('merchantTab').hidden=merchantAccess.length===0;$('senderName').value=me.name;
   await refresh();
   favoriteIds=new Set((await api('/favorites')).program_ids);renderPrograms();
-  if(['admin','merchant'].includes(me.role)){cashierMerchants=await api('/staff/merchants');renderCashierMerchants();}
+  if(merchantAccess.length){cashierMerchants=await api('/staff/merchants');renderCashierMerchants();renderStudioSelect();await loadRedeemBranches();}
   tab('shop');loadInbox().catch(()=>{});
 }
 async function refresh(){
@@ -52,7 +54,7 @@ async function refresh(){
   $('merchantDirectory').innerHTML=merchantList.map(m=>`<div class="line"><strong>#${m.id}</strong> · ${esc(m.name)}</div>`).join('')||'<span class="soft">No merchants available.</span>';
   renderCashierMerchants();
 }
-function renderCashierMerchants(){let source=user?.role==='admin'?merchantList:cashierMerchants;$('redeemMerchant').innerHTML=source.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('');}
+function renderCashierMerchants(){let source=merchantAccess;$('redeemMerchant').innerHTML=source.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('');}
 function chooseProgram(id){tab('shop');$('program').value=id;updatePreview();$('buyPanel').scrollIntoView({behavior:'smooth'});}
 function renderPrograms(){
   const search=$('searchPrograms').value.trim().toLowerCase();
@@ -81,10 +83,7 @@ document.querySelectorAll('.filter-chips [data-filter]').forEach(btn=>btn.onclic
 document.querySelectorAll('[data-category]').forEach(btn=>btn.onclick=()=>{categoryFilter=btn.dataset.category;document.querySelectorAll('[data-category]').forEach(b=>b.classList.toggle('active',b===btn));renderPrograms();});
 $('heroExplore').onclick=()=>{if(!token){$('auth').scrollIntoView({behavior:'smooth'});return;}tab('shop');$('shop').scrollIntoView({behavior:'smooth'});};
 document.querySelectorAll('[data-amount]').forEach(btn=>btn.onclick=()=>{$('amount').value=btn.dataset.amount;updatePreview();});
-document.querySelectorAll('.design-option').forEach(btn=>btn.onclick=()=>{selectedDesign=btn.dataset.design;document.querySelectorAll('[data-category]').forEach(btn=>btn.onclick=()=>{categoryFilter=btn.dataset.category;document.querySelectorAll('[data-category]').forEach(b=>b.classList.toggle('active',b===btn));renderPrograms();});
-$('heroExplore').onclick=()=>{if(!token){$('auth').scrollIntoView({behavior:'smooth'});return;}tab('shop');$('shop').scrollIntoView({behavior:'smooth'});};
-document.querySelectorAll('[data-amount]').forEach(btn=>btn.onclick=()=>{$('amount').value=btn.dataset.amount;updatePreview();});
-document.querySelectorAll('.design-option').forEach(b=>b.classList.toggle('selected',b===btn));updatePreview();});
+document.querySelectorAll('.design-option').forEach(btn=>btn.onclick=()=>{selectedDesign=btn.dataset.design;document.querySelectorAll('.design-option').forEach(b=>b.classList.toggle('selected',b===btn));updatePreview();});
 for(const id of ['amount','occasion','recipient','senderName','giftMessage'])$(id).addEventListener('input',updatePreview);
 function updatePreview(){
   const selected=programList.find(p=>p.id===Number($('program').value));const box=$('giftPreview');
@@ -172,13 +171,14 @@ async function showRedemptionCode(id){
     const r=await api('/cards/'+id+'/redemption-pass','POST');
     $('successBody').innerHTML=`<span class="section-tag">ONE-TIME REDEMPTION</span><h2 class="center" id="successTitle">Ready to redeem</h2><p class="soft center">Show both values to your cashier. This PIN expires in five minutes and works only once.</p><div class="pin-display">${esc(r.redeem_pin)}</div><div class="bill"><div><span>Gift code</span><strong>${esc(r.card_code)}</strong></div><div><span>Expires</span><strong>5 minutes</strong></div></div><p class="soft center">Generating another PIN immediately invalidates this one.</p><button class="btn solid wide" id="pinDone">Done</button>`;
     $('pinDone').onclick=()=>closeModal('successModal');openModal('successModal');
+    try{const qr=await api('/cards/'+id+'/qr');if(!$('successModal').hidden){const image=document.createElement('img');image.src='data:image/png;base64,'+qr.png_base64;image.alt='Gift card QR for cashier; PIN required separately';image.className='wallet-qr';$('successBody').insertBefore(image,$('successBody').querySelector('.pin-display'));}}catch(err){console.warn('QR unavailable:',err.message);}
   }catch(e){notify(e.message,true);}
 }
 async function sendGift(id){const phone=prompt('Recipient registered phone number (251...):');if(!phone)return;try{const r=await api('/cards/'+id+'/send','POST',{recipient_phone:phone});notify('🎁 '+r.message+' Recipient: '+r.recipient);await loadWallet();}catch(err){notify(err.message,true);}}
 async function showHistory(id){try{const entries=await api('/cards/'+id+'/history');$('successBody').innerHTML=`<span class="section-tag">GIFT ACTIVITY</span><h2 id="successTitle">Gift history</h2>${entries.length?entries.map(x=>`<div class="history-row"><strong>${esc(x.action)}</strong><span>${esc(x.detail)}</span><small>${new Date(x.at).toLocaleString()} · ${money(x.amount_etb)}</small></div>`).join(''):'<p class="soft">No activity yet.</p>'}<button class="btn solid wide" id="historyDone">Close</button>`;$('historyDone').onclick=()=>closeModal('successModal');openModal('successModal');}catch(e){notify(e.message,true);}}
 $('refreshWallet').onclick=loadWallet;
 $('redeemForm').onsubmit=event=>handleForm(event,async()=>{
-  const r=await api('/redemptions','POST',{card_code:$('redeemCode').value.trim(),merchant_id:Number($('redeemMerchant').value),amount_etb:$('redeemAmount').value,redeem_pin:$('redeemPin').value.trim(),idempotency_key:makeKey()});
+  const r=await api('/redemptions','POST',{card_code:$('redeemCode').value.trim(),merchant_id:Number($('redeemMerchant').value),branch_id:$('redeemBranch').value?Number($('redeemBranch').value):null,amount_etb:$('redeemAmount').value,redeem_pin:$('redeemPin').value.trim(),idempotency_key:makeKey()});
   $('redeemPin').value='';
   $('successBody').innerHTML=`<div class="success-mark">✓</div><h2 id="successTitle" class="center">Gift redeemed!</h2><p class="soft center">Demo transaction captured successfully.</p><div class="bill"><div><span>Receipt</span><strong>${esc(r.receipt)}</strong></div><div><span>Merchant</span><strong>${esc(r.merchant)}</strong></div><div><span>Amount</span><strong>${money(r.amount_etb)}</strong></div><div><span>Remaining</span><strong>${money(r.balance_etb)}</strong></div></div><button id="downloadRedeemReceipt" class="btn outlined wide">↓ Download demo receipt</button><button id="closeReceipt" class="btn solid wide">Done</button>`;
   $('downloadRedeemReceipt').onclick=()=>downloadRedemptionReceipt(r.id);$('closeReceipt').onclick=()=>closeModal('successModal');openModal('successModal');notify('✓ Redemption completed: '+r.receipt);
@@ -219,14 +219,14 @@ async function loadInbox(){
 async function markRead(id){try{await api('/notifications/'+id+'/read','POST');await loadInbox();}catch(e){notify(e.message,true);}}
 $('refreshInbox').onclick=loadInbox;
 function renderStudioSelect(){
-  const choices=user?.role==='admin'?merchantList:cashierMerchants;
+  const choices=merchantAccess;
   const selected=$('merchantStudioSelect').value;
   $('merchantStudioSelect').innerHTML=choices.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('');
   if(choices.some(m=>String(m.id)===selected))$('merchantStudioSelect').value=selected;
 }
 async function loadMerchant(){
   try{
-    if(['admin','merchant'].includes(user.role))cashierMerchants=await api('/staff/merchants');
+    if(merchantAccess.length)cashierMerchants=await api('/staff/merchants');
     renderStudioSelect();const mid=Number($('merchantStudioSelect').value);if(!mid)return;
     const [stats,rows,branches]=await Promise.all([api('/merchant/overview?merchant_id='+mid),api('/merchant/redemptions?merchant_id='+mid),api('/branches?merchant_id='+mid)]);
     merchantRows=rows;

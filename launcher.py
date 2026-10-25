@@ -1,4 +1,4 @@
-"""Local-only launcher for GiftBridge v0.4. Browser opens after server health is ready."""
+"""Local-only launcher for GiftBridge v0.5. Browser opens after server health is ready."""
 import json
 import os
 import subprocess
@@ -14,7 +14,7 @@ URL = 'http://127.0.0.1:8000'
 
 def main():
     os.chdir(ROOT)
-    print('\n  ✦ GiftBridge Ethiopia v0.4 | DEMO MODE (no real payments)')
+    print('\n  ✦ GiftBridge Ethiopia v0.5 | DEMO MODE (no real payments)')
     print('  Starting local web server at', URL)
     env = os.environ.copy()
     env.setdefault('APP_ENV', 'development')
@@ -29,7 +29,7 @@ def main():
             try:
                 with urllib.request.urlopen(URL + '/api/health', timeout=0.5) as response:
                     data=json.loads(response.read())
-                    if data.get('version')=='0.4.0':
+                    if data.get('version')=='0.5.0':
                         print('  Ready! Opening your browser...')
                         if os.getenv('GIFTBRIDGE_NO_BROWSER')!='1':webbrowser.open(URL)
                         opened=True

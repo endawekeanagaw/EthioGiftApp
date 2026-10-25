@@ -1,16 +1,21 @@
 # Change log — GiftBridge Ethiopia
 
+## v0.5.0 — Merchant ecosystem & cashier POS
+
+- Customer merchant applications with approval/rejection, review notes and status notifications.
+- Approved applicant becomes OWNER of a new merchant and its initial branch.
+- Scoped merchant membership roles: OWNER, MANAGER and assigned-branch CASHIER; restricted team management and deactivation.
+- Owner and manager merchant-specific gift program publishing, independently from universal platform programs.
+- QR gift-code generation and supported-browser POS scanning, with separate PIN required for redemption.
+- Cashier branch authorization, recording of checkout branch and acting cashier.
+- Merchant reports for 7/30/90/365-day periods, daily redemption trends, sales, fee and branch breakdown.
+- Browser and API tests, v0.4 data-preserving schema upgrade, Windows launcher dependency check.
+- Continued strict **SANDBOX ONLY** operation: no real KYC, payments, money or settlement.
+
 ## v0.4.0 — Refined customer experience
 
-- Customer: modernized shop, catalog search and categories, persistent favorite programs.
-- Personalization: denomination shortcuts, preview of personal message, occasion and design, checkout flow styling.
-- Wallet: demo balance summary, search, status filter, remaining-balance visualization.
-- Delivery: privacy-conscious message sharing (announcements only) with registered-recipient in-app delivery.
-- Receipts: authenticated purchase and redemption receipt JSON endpoints; downloaded branded demo HTML receipt (printable as PDF).
-- Merchant admin: gift program storefront metadata (category, description and emoji) with backward-compatible supporting table.
-- Localization: English / Amharic switch for key marketing/navigation strings; full translation deferred.
-- Correctness: extended API tests, browser workflow verification, v0.3 data-preservation upgrade test.
-- Technical: kept simulated-only funds, account restrictions, one-time PIN redemption and transaction ledger; updated launcher version.
+- Customer marketplace, favorites, gift personalization, receipts, responsive wallet and partial Amharic labels.
+- Simulated only; existing card balances and orders preserved.
 
 ## v0.3.0 — Personalized gifting and merchant studio
 
