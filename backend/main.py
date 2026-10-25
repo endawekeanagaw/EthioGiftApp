@@ -138,8 +138,46 @@ class Audit(Base):
     detail: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=lambda: datetime.now(timezone.utc))
 
+class GiftPresentation(Base):
+    __tablename__='gift_presentations'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey('gift_orders.id'), unique=True)
+    occasion: Mapped[str] = mapped_column(String(35), default='JUST_BECAUSE')
+    design: Mapped[str] = mapped_column(String(35), default='emerald')
+    sender_name: Mapped[str] = mapped_column(String(120), default='')
+
+class GiftNotification(Base):
+    __tablename__='gift_notifications'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    title: Mapped[str] = mapped_column(String(150))
+    body: Mapped[str] = mapped_column(String(350))
+    card_id: Mapped[Optional[int]] = mapped_column(ForeignKey('cards.id'),nullable=True)
+    event_type: Mapped[str] = mapped_column(String(30))
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True),nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=lambda: datetime.now(timezone.utc))
+
+class CardRedeemPass(Base):
+    __tablename__='card_redeem_passes'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey('cards.id'))
+    owner_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    secret_digest: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer,default=0)
+    consumed: Mapped[int] = mapped_column(Integer,default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=lambda: datetime.now(timezone.utc))
+
+class MerchantBranch(Base):
+    __tablename__='merchant_branches'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey('merchants.id'))
+    name: Mapped[str] = mapped_column(String(100))
+    city: Mapped[str] = mapped_column(String(100),default='Addis Ababa')
+    active: Mapped[int] = mapped_column(Integer,default=1)
+
 Base.metadata.create_all(engine)
-app = FastAPI(title='GiftBridge Ethiopia · Sandbox MVP',version='0.2.0',description='Only SIMULATED payments, card value, and settlement. Do not use with real money.')
+app = FastAPI(title='GiftBridge Ethiopia · Sandbox MVP',version='0.3.0',description='Only SIMULATED payments, card value, and settlement. Do not use with real money.')
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:8000','http://127.0.0.1:8000'],allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 
 def db():
@@ -187,16 +225,25 @@ def money(v:Decimal):
 def etb(minor):return float(Decimal(minor)/100)
 def entry(s,event,account,delta):s.add(Entry(event_id=event,account=account,delta_minor=delta))
 def audit(s,u,action,detail):s.add(Audit(actor_id=u.id,action=action,detail=detail))
+def presentation(s,order_id):
+    item=s.scalar(select(GiftPresentation).where(GiftPresentation.order_id==order_id))
+    return {'occasion':item.occasion,'design':item.design,'sender_name':item.sender_name} if item else {'occasion':'JUST_BECAUSE','design':'emerald','sender_name':''}
+
 def card_out(c,s):
     p=s.get(Program,c.program_id)
-    return {'id':c.id,'code':c.public_id,'program_id':p.id,'program':p.name,'kind':p.kind,'owner_id':c.owner_id,'original_etb':etb(c.original_minor),'balance_etb':etb(c.balance_minor),'status':c.status,'created_at':c.created_at.isoformat()}
+    link=s.scalar(select(OrderCard).where(OrderCard.card_id==c.id))
+    o=s.get(GiftOrder,link.order_id) if link else None
+    details=presentation(s,o.id) if o else {'occasion':'JUST_BECAUSE','design':'emerald','sender_name':''}
+    sender=s.get(User,o.buyer_id) if o else None
+    return {'id':c.id,'sender':details['sender_name'] or (sender.name if sender else 'Someone special'),
+        'message':o.message if o else '',**details,'code':c.public_id,'program_id':p.id,'program':p.name,'kind':p.kind,'owner_id':c.owner_id,'original_etb':etb(c.original_minor),'balance_etb':etb(c.balance_minor),'status':c.status,'created_at':c.created_at.isoformat()}
 def order_out(o,s):
     p=s.get(Program,o.program_id)
     oc=s.scalar(select(OrderCard).where(OrderCard.order_id==o.id))
     attempts=s.scalars(select(PaymentAttempt).where(PaymentAttempt.order_id==o.id).order_by(PaymentAttempt.id)).all()
     return {'id':o.id,'code':o.order_code,'status':o.status,'program':p.name,'kind':p.kind,
         'amount_etb':etb(o.amount_minor),'recipient':s.get(User,o.recipient_id).name,
-        'recipient_phone':s.get(User,o.recipient_id).phone,'message':o.message,
+        'recipient_phone':s.get(User,o.recipient_id).phone,'message':o.message,**presentation(s,o.id),
         'card_code':s.get(Card,oc.card_id).public_id if oc else None,
         'attempts':[{'provider':a.provider,'status':a.status,'reference':a.reference} for a in attempts],
         'created_at':o.created_at.isoformat()}
@@ -217,6 +264,9 @@ class OrderIn(BaseModel):
     amount_etb:Decimal
     recipient_phone:Optional[str]=None
     message:str=Field(default='',max_length=300)
+    occasion:str=Field(default='JUST_BECAUSE',max_length=35)
+    design:str=Field(default='emerald',max_length=35)
+    sender_name:str=Field(default='',max_length=120)
 class PaymentIn(BaseModel):
     outcome:str=Field(pattern='^(SUCCESS|FAILED)$')
     channel:str=Field(default='M-PESA (simulated)',max_length=60)
@@ -226,6 +276,7 @@ class Redeem(BaseModel):
     merchant_id:int
     amount_etb:Decimal
     idempotency_key:str=Field(min_length=8,max_length=100)
+    redeem_pin:str=Field(min_length=8,max_length=8,pattern=r'^\d{8}$')
 
 @app.post('/api/auth/register')
 def register(body:Register,s:Session=Depends(db)):
@@ -297,7 +348,13 @@ def create_order(body:OrderIn,u=Depends(current),s:Session=Depends(db)):
         if not receiver:raise HTTPException(404,'Recipient must create a GiftBridge account first')
     o=GiftOrder(order_code='GBO-'+secrets.token_hex(5).upper(),buyer_id=u.id,recipient_id=receiver.id,
                 program_id=p.id,amount_minor=amt,message=body.message.strip(),status='PENDING')
-    s.add(o);s.flush();audit(s,u,'CREATE_ORDER',o.order_code);s.commit()
+    if body.occasion not in ('BIRTHDAY','WEDDING','GRADUATION','HOLIDAY','THANK_YOU','JUST_BECAUSE'):
+        raise HTTPException(422,'Invalid occasion')
+    if body.design not in ('emerald','midnight','coral','lavender','gold'):
+        raise HTTPException(422,'Invalid card design')
+    s.add(o);s.flush()
+    s.add(GiftPresentation(order_id=o.id,occasion=body.occasion,design=body.design,sender_name=body.sender_name.strip()))
+    audit(s,u,'CREATE_ORDER',o.order_code);s.commit()
     return order_out(o,s)
 @app.get('/api/orders')
 def my_orders(u=Depends(current),s:Session=Depends(db)):
@@ -333,6 +390,13 @@ def simulate_payment(order_id:int,body:PaymentIn,u=Depends(current),s:Session=De
         event='ISSUE-'+str(c.id)
         entry(s,event,'SIMULATED_FUNDS',o.amount_minor)
         entry(s,event,'GIFT_LIABILITY',-o.amount_minor)
+        if o.recipient_id!=u.id:
+            s.add(GiftNotification(user_id=o.recipient_id,title='A gift is waiting for you 🎁',
+                body=f'{u.name} sent you {p.name if (p:=s.get(Program,o.program_id)) else "a digital gift"}. Open your wallet to unwrap it.',
+                card_id=c.id,event_type='GIFT_RECEIVED'))
+        else:
+            s.add(GiftNotification(user_id=o.recipient_id,title='Your gift is ready ✨',
+                body='Your digital gift card is now in your wallet.',card_id=c.id,event_type='GIFT_ISSUED'))
         audit(s,u,'PAYMENT_SUCCESS',f'{o.order_code} {c.public_id}')
     else:audit(s,u,'PAYMENT_FAILED',o.order_code)
     s.commit()
@@ -368,6 +432,8 @@ def send(card_id:int,body:Send,u=Depends(current),s:Session=Depends(db)):
     if not target:raise HTTPException(404,'Recipient must register first')
     if target.id==u.id:raise HTTPException(422,'Cannot send to yourself')
     c.owner_id=target.id
+    s.execute(update(CardRedeemPass).where(CardRedeemPass.card_id==c.id,CardRedeemPass.consumed==0).values(consumed=1))
+    s.add(GiftNotification(user_id=target.id,title='Someone sent you a gift 🎁',body=f'{u.name} sent you {s.get(Program,c.program_id).name}.',card_id=c.id,event_type='GIFT_TRANSFER'))
     s.add(Transfer(card_id=c.id,sender_id=u.id,receiver_id=target.id))
     audit(s,u,'SEND_GIFT',f'{c.public_id} -> {target.id}');s.commit()
     return {'message':'Gift sent successfully!','recipient':target.name}
@@ -390,17 +456,34 @@ def redeem(body:Redeem,u=Depends(current),s:Session=Depends(db)):
     if not allowed:raise HTTPException(403,'This gift cannot be redeemed at that merchant')
     if c.status not in ('ACTIVE','PARTIALLY_REDEEMED') or c.balance_minor<amount:
         raise HTTPException(409,'Insufficient balance or inactive gift')
-    # SQLite demo does not implement full concurrent-lock semantics; production needs PostgreSQL and review.
-    c.balance_minor-=amount;c.status='FULLY_REDEEMED' if c.balance_minor==0 else 'PARTIALLY_REDEEMED'
+    now=datetime.now(timezone.utc)
+    redeem_pass=s.scalar(select(CardRedeemPass).where(CardRedeemPass.card_id==c.id,CardRedeemPass.consumed==0).order_by(CardRedeemPass.id.desc()).with_for_update())
+    def ensure_utc(dt): return dt.replace(tzinfo=timezone.utc) if dt and dt.tzinfo is None else dt
+    if not redeem_pass or redeem_pass.owner_id!=c.owner_id or ensure_utc(redeem_pass.expires_at)<=now:
+        raise HTTPException(403,'Ask the gift owner to generate a fresh 8-digit redemption PIN')
+    if redeem_pass.attempts>=5:raise HTTPException(429,'Too many attempts. Ask the owner to generate a new PIN')
+    expected=hmac.new(JWT_SECRET.encode(),f'{c.id}:{redeem_pass.id}:{body.redeem_pin}'.encode(),hashlib.sha256).hexdigest()
+    if not secrets.compare_digest(expected,redeem_pass.secret_digest):
+        redeem_pass.attempts+=1
+        s.commit()
+        raise HTTPException(403,'Invalid redemption PIN')
+    # Conditional atomic update avoids overdraft even under competing POS requests.
+    changed=s.execute(update(Card).where(Card.id==c.id,Card.balance_minor>=amount,Card.status.in_(['ACTIVE','PARTIALLY_REDEEMED']),Card.owner_id==redeem_pass.owner_id).values(balance_minor=Card.balance_minor-amount))
+    if changed.rowcount!=1:
+        s.rollback();raise HTTPException(409,'Card balance changed; retry with a new PIN')
+    s.refresh(c)
+    c.status='FULLY_REDEEMED' if c.balance_minor==0 else 'PARTIALLY_REDEEMED'
+    redeem_pass.consumed=1
     fee=amount*3//100
     r=Redemption(card_id=c.id,merchant_id=body.merchant_id,amount_minor=amount,fee_minor=fee,idempotency_key=body.idempotency_key)
     s.add(r);s.flush();event='REDEEM-'+str(r.id)
     entry(s,event,'GIFT_LIABILITY',amount)
     entry(s,event,'MERCHANT_PAYABLE:'+str(body.merchant_id),-(amount-fee))
     entry(s,event,'PLATFORM_FEE',-fee)
+    s.add(GiftNotification(user_id=c.owner_id,title='Gift redeemed successfully ✓',body=f'{etb(amount):,.2f} ETB spent at {merchant.name}. Remaining: {etb(c.balance_minor):,.2f} ETB.',card_id=c.id,event_type='REDEEMED'))
     audit(s,u,'REDEEM',f'{c.public_id} {amount}')
     s.commit()
-    return {'id':r.id,'status':'CAPTURED','balance_etb':etb(c.balance_minor),'merchant_payable_etb':etb(amount-fee)}
+    return {'id':r.id,'receipt':'GBR-'+str(r.id).zfill(7),'merchant':merchant.name,'status':'CAPTURED','amount_etb':etb(amount),'balance_etb':etb(c.balance_minor),'merchant_payable_etb':etb(amount-fee)}
 @app.get('/api/admin/overview')
 def overview(u=Depends(admin),s:Session=Depends(db)):
     return {'merchants':s.scalar(select(func.count()).select_from(Merchant)),
@@ -421,8 +504,96 @@ def settlements(u=Depends(admin),s:Session=Depends(db)):
          'payable_etb':etb(sum(r.amount_minor-r.fee_minor for r in rs)),
          'status':'SIMULATED · NOT SETTLED'})
     return result
+
+# === v0.3 product experience: gift presentations, secure redemption and merchant reporting ===
+@app.get('/api/occasions')
+def occasions():
+    return [{'id':key,'name':name,'emoji':emoji} for key,name,emoji in [
+        ('BIRTHDAY','Birthday','🎂'),('WEDDING','Wedding','💍'),('GRADUATION','Graduation','🎓'),
+        ('HOLIDAY','Holiday','✨'),('THANK_YOU','Thank you','💐'),('JUST_BECAUSE','Just because','🎁')]]
+
+@app.get('/api/notifications')
+def get_notifications(u=Depends(current),s:Session=Depends(db)):
+    items=s.scalars(select(GiftNotification).where(GiftNotification.user_id==u.id).order_by(GiftNotification.id.desc()).limit(80)).all()
+    return [{'id':n.id,'title':n.title,'body':n.body,'card_id':n.card_id,'event_type':n.event_type,
+             'read':n.read_at is not None,'at':n.created_at.isoformat()} for n in items]
+
+@app.post('/api/notifications/{notification_id}/read')
+def read_notification(notification_id:int,u=Depends(current),s:Session=Depends(db)):
+    item=s.scalar(select(GiftNotification).where(GiftNotification.id==notification_id,GiftNotification.user_id==u.id))
+    if not item:raise HTTPException(404,'Notification not found')
+    item.read_at=datetime.now(timezone.utc);s.commit()
+    return {'message':'Marked as read'}
+
+@app.post('/api/cards/{card_id}/redemption-pass')
+def generate_redemption_pass(card_id:int,u=Depends(current),s:Session=Depends(db)):
+    c=s.scalar(select(Card).where(Card.id==card_id,Card.owner_id==u.id).with_for_update())
+    if not c:raise HTTPException(404,'Gift not found in your wallet')
+    if c.status not in ('ACTIVE','PARTIALLY_REDEEMED') or c.balance_minor<=0:
+        raise HTTPException(409,'Gift is already spent or inactive')
+    s.execute(update(CardRedeemPass).where(CardRedeemPass.card_id==card_id,CardRedeemPass.consumed==0).values(consumed=1))
+    pin=f'{secrets.randbelow(100000000):08d}'
+    x=CardRedeemPass(card_id=card_id,owner_id=u.id,secret_digest='',
+                     expires_at=datetime.now(timezone.utc)+timedelta(minutes=5))
+    s.add(x);s.flush()
+    x.secret_digest=hmac.new(JWT_SECRET.encode(),f'{c.id}:{x.id}:{pin}'.encode(),hashlib.sha256).hexdigest()
+    audit(s,u,'ISSUE_REDEMPTION_PIN',c.public_id)
+    s.commit()
+    return {'card_code':c.public_id,'redeem_pin':pin,'expires_in_seconds':300,
+            'message':'Show this one-time 8-digit PIN to the cashier. Valid for 5 minutes.'}
+
+class NewBranch(BaseModel):
+    merchant_id:int
+    name:str=Field(min_length=2,max_length=100)
+    city:str=Field(default='Addis Ababa',max_length=100)
+
+@app.post('/api/admin/branches')
+def create_branch(body:NewBranch,u=Depends(admin),s:Session=Depends(db)):
+    m=s.get(Merchant,body.merchant_id)
+    if not m or m.status!='ACTIVE':raise HTTPException(404,'Merchant not found')
+    b=MerchantBranch(merchant_id=m.id,name=body.name.strip(),city=body.city.strip())
+    s.add(b);s.flush();audit(s,u,'CREATE_BRANCH',f'{m.id} {b.name}');s.commit()
+    return {'id':b.id,'name':b.name,'message':'Branch created successfully'}
+
+@app.get('/api/branches')
+def list_branches(merchant_id:Optional[int]=None,s:Session=Depends(db)):
+    q=select(MerchantBranch).where(MerchantBranch.active==1)
+    if merchant_id is not None:q=q.where(MerchantBranch.merchant_id==merchant_id)
+    return [{'id':b.id,'merchant_id':b.merchant_id,'name':b.name,'city':b.city} for b in s.scalars(q.order_by(MerchantBranch.id))]
+
+def merchant_permission(u,s,merchant_id):
+    m=s.get(Merchant,merchant_id)
+    if not m or m.status!='ACTIVE':raise HTTPException(404,'Merchant not found')
+    if u.role!='admin' and not s.scalar(select(MerchantStaff.id).where(MerchantStaff.user_id==u.id,MerchantStaff.merchant_id==merchant_id)):
+        raise HTTPException(403,'Not assigned to this merchant')
+    return m
+
+@app.get('/api/merchant/overview')
+def merchant_overview(merchant_id:int,u=Depends(current),s:Session=Depends(db)):
+    m=merchant_permission(u,s,merchant_id)
+    rs=s.scalars(select(Redemption).where(Redemption.merchant_id==m.id)).all()
+    return {'merchant':m.name,'redemptions':len(rs),'gross_etb':etb(sum(r.amount_minor for r in rs)),
+            'fees_etb':etb(sum(r.fee_minor for r in rs)),
+            'payable_etb':etb(sum(r.amount_minor-r.fee_minor for r in rs)),
+            'branches':s.scalar(select(func.count()).select_from(MerchantBranch).where(MerchantBranch.merchant_id==m.id)),
+            'settlement_status':'SIMULATED / NO PAYOUT'}
+
+@app.get('/api/merchant/redemptions')
+def merchant_redemptions(merchant_id:int,u=Depends(current),s:Session=Depends(db)):
+    m=merchant_permission(u,s,merchant_id)
+    rs=s.scalars(select(Redemption).where(Redemption.merchant_id==m.id).order_by(Redemption.id.desc()).limit(200)).all()
+    return [{'id':r.id,'receipt':'GBR-'+str(r.id).zfill(7),'card_code':s.get(Card,r.card_id).public_id,
+             'amount_etb':etb(r.amount_minor),'fee_etb':etb(r.fee_minor),
+             'payable_etb':etb(r.amount_minor-r.fee_minor),'at':r.created_at.isoformat()} for r in rs]
+
+@app.get('/api/wallet/summary')
+def wallet_summary(u=Depends(current),s:Session=Depends(db)):
+    cards=s.scalars(select(Card).where(Card.owner_id==u.id)).all()
+    return {'cards':len(cards),'active_cards':sum(c.balance_minor>0 for c in cards),
+            'balance_etb':etb(sum(c.balance_minor for c in cards))}
+
 @app.get('/api/health')
-def health():return {'status':'ok','mode':'SIMULATION','version':'0.2.0'}
+def health():return {'status':'ok','mode':'SIMULATION','version':'0.3.0'}
 app.mount('/assets',StaticFiles(directory=str(ROOT/'frontend')),name='assets')
 @app.get('/')
 def home():return FileResponse(ROOT/'frontend'/'index.html')
